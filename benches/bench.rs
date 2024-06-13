@@ -287,7 +287,7 @@ mod bivarcommitment_benches {
 
 mod public_key_set_benches {
     use super::*;
-    use blsttc::{PublicKeySet, SecretKeySet};
+    use blsttc::{PublicKeySetG1, SecretKeySet};
     use rand_core::SeedableRng;
     use rand_xorshift::XorShiftRng;
     use std::collections::BTreeMap;
@@ -307,13 +307,13 @@ mod public_key_set_benches {
                     let pk_set = sk_set.public_keys();
                     let mut sigs = BTreeMap::default();
                     for i in 0..=*threshold {
-                        let sig = sk_set.secret_key_share(i).sign(msg);
+                        let sig = sk_set.secret_key_share(i).sign_g2(msg);
                         sigs.insert(i, sig);
                     }
 
                     b.iter(|| {
                         pk_set
-                            .combine_signatures(&sigs)
+                            .combine_g2_signatures(&sigs)
                             .expect("could not combine signatures");
                     })
                 },
@@ -388,7 +388,7 @@ mod public_key_set_benches {
                     let pk_set = sk_set.public_keys();
                     let bytes = bincode::serialize(&pk_set).unwrap();
                     b.iter(|| {
-                        let _pks: PublicKeySet = bincode::deserialize(&bytes).unwrap();
+                        let _pks: PublicKeySetG1 = bincode::deserialize(&bytes).unwrap();
                     })
                 },
             );
@@ -418,7 +418,7 @@ mod public_key_benches {
                 let pk = sk.public_key();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
-                let sig = sk.sign(msg);
+                let sig = sk.sign_to_g2(msg);
                 (pk, msg, sig)
             };
             b.iter_with_setup(rand_factors, |(pk, msg, sig)| pk.verify(&sig, msg));

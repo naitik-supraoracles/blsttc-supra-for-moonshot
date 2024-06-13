@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use blsttc::{
-    PublicKeySet, PublicKeyShare, SecretKeySet, SecretKeyShare, Signature, SignatureShare,
+    PublicKeySetG1, PublicKeyShareG1, SecretKeySet, SecretKeyShare, SignatureG2, SignatureShareG2,
 };
 
 type UserId = usize;
@@ -17,7 +17,7 @@ type MsgDatabase = BTreeMap<UserId, BTreeMap<Msg, Vec<NodeSignature>>>;
 // broadcast the message to the network, the message text, and the combined signature of the
 // message. A block can be appended to this list each time our chat protocol runs its consensus
 // algorithm.
-type ChatLog = Vec<(UserId, Msg, Signature)>;
+type ChatLog = Vec<(UserId, Msg, SignatureG2)>;
 
 // Represents a network of nodes running a distributed chat protocol. Clients, or "users", of our
 // network, create a string that they want to append to the network's `chat_log`, they broadcast
@@ -26,7 +26,7 @@ type ChatLog = Vec<(UserId, Msg, Signature)>;
 // messages. The first message to receive `threshold + 1` signatures from validator nodes
 // gets added to the `chat_log`.
 struct ChatNetwork {
-    pk_set: PublicKeySet,
+    pk_set: PublicKeySetG1,
     nodes: Vec<Node>,
     chat_log: ChatLog,
     n_users: usize,
@@ -89,7 +89,7 @@ impl ChatNetwork {
     // Our chat protocol's consensus algorithm. This algorithm produces a new block to append to the chat
     // log. Our consensus uses threshold-signing to verify a message has received enough
     // signature shares (i.e. has been signed by `threshold + 1` nodes).
-    fn run_consensus(&self) -> Option<(UserId, Msg, Signature)> {
+    fn run_consensus(&self) -> Option<(UserId, Msg, SignatureG2)> {
         // Create a new `MsgDatabase` of every message that has been signed by a validator node.
         let all_pending: MsgDatabase =
             self.nodes
@@ -127,7 +127,7 @@ impl ChatNetwork {
                     }
                 });
 
-                if let Ok(sig) = self.pk_set.combine_signatures(sigs) {
+                if let Ok(sig) = self.pk_set.combine_g2_signatures(sigs) {
                     return Some((*user_id, msg.clone(), sig));
                 }
             }
@@ -141,12 +141,12 @@ impl ChatNetwork {
 struct Node {
     id: NodeId,
     sk_share: SecretKeyShare,
-    pk_share: PublicKeyShare,
+    pk_share: PublicKeyShareG1,
     pending: MsgDatabase,
 }
 
 impl Node {
-    fn new(id: NodeId, sk_share: SecretKeyShare, pk_share: PublicKeyShare) -> Self {
+    fn new(id: NodeId, sk_share: SecretKeyShare, pk_share: PublicKeyShareG1) -> Self {
         Node {
             id,
             sk_share,
@@ -160,7 +160,7 @@ impl Node {
     fn recv(&mut self, user_id: UserId, msg: Msg) {
         let sig = NodeSignature {
             node_id: self.id,
-            sig: self.sk_share.sign(msg.as_bytes()),
+            sig: self.sk_share.sign_g2(msg.as_bytes()),
         };
         self.pending
             .entry(user_id)
@@ -174,7 +174,7 @@ impl Node {
 #[derive(Clone, Debug)]
 struct NodeSignature {
     node_id: NodeId,
-    sig: SignatureShare,
+    sig: SignatureShareG2,
 }
 
 // A client of our chat protocol.

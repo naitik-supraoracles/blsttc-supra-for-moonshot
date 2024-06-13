@@ -3,7 +3,6 @@
 // Clippy warns that it's dangerous to derive `PartialEq` and explicitly implement `Hash`, but the
 // `blstrs` types don't implement `Hash`, so we can't derive it.
 #![allow(clippy::derive_hash_xor_eq)]
-#![warn(missing_docs)]
 
 // re-export crates used in our public API.
 pub use blstrs;
@@ -20,6 +19,7 @@ mod util;
 pub mod error;
 pub mod poly;
 pub mod serde_impl;
+pub mod nizk_dleq;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -40,12 +40,12 @@ use crate::cmp_pairing::cmp_affine;
 use crate::convert::{derivation_index_into_fr, fr_from_bytes, g1_from_bytes, g2_from_bytes};
 pub use crate::error::{Error, Result};
 pub use crate::into_fr::IntoFr;
-use crate::poly::{Commitment, Poly};
+use crate::poly::{CommitmentG1, CommitmentG2, Poly};
 use crate::secret::clear_fr;
 use crate::util::sha3_256;
 
 pub use blstrs::{Bls12 as PEngine, G1Affine, G1Projective, G2Affine, G2Projective, Scalar as Fr};
-
+use rayon::prelude::*;
 /// The size of a secret key's representation in bytes.
 pub const SK_SIZE: usize = 32;
 
@@ -60,90 +60,154 @@ pub const DST: &[u8; 43] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 
 /// A public key.
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
-pub struct PublicKey(#[serde(with = "serde_impl::affine")] G1Affine);
+pub struct PublicKeyG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 
-impl Hash for PublicKey {
+#[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
+pub struct PublicKeyG2(#[serde(with = "serde_impl::affine")] G2Affine);
+
+impl Hash for PublicKeyG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.to_compressed().as_ref().hash(state);
     }
 }
 
-impl fmt::Debug for PublicKey {
+impl Hash for PublicKeyG2 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_compressed().as_ref().hash(state);
+    }
+}
+
+impl fmt::Debug for PublicKeyG1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uncomp = self.0.to_uncompressed();
         write!(f, "PublicKey({:0.10})", HexFmt(uncomp))
     }
 }
 
-impl PartialOrd for PublicKey {
+impl fmt::Debug for PublicKeyG2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uncomp = self.0.to_uncompressed();
+        write!(f, "PublicKeyG2({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl PartialOrd for PublicKeyG1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for PublicKey {
+impl PartialOrd for PublicKeyG2 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PublicKeyG1 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        cmp_affine(&self.0, &other.0)
+    }
+}
+
+impl Ord for PublicKeyG2 {
     fn cmp(&self, other: &Self) -> Ordering {
         cmp_affine(&self.0, &other.0)
     }
 }
 
 /// Utility to convert blsttc to blst types
-impl From<PublicKey> for G1Affine {
-    fn from(item: PublicKey) -> Self {
+impl From<PublicKeyG1> for G1Affine {
+    fn from(item: PublicKeyG1) -> Self {
+        item.0
+    }
+}
+
+impl From<PublicKeyG2> for G2Affine {
+    fn from(item: PublicKeyG2) -> Self {
         item.0
     }
 }
 
 /// Utility to convert blsttc to blst types
-impl From<G1Affine> for PublicKey {
+impl From<G1Affine> for PublicKeyG1 {
     fn from(item: G1Affine) -> Self {
-        PublicKey(item)
+        PublicKeyG1(item)
+    }
+}
+
+impl From<G2Affine> for PublicKeyG2 {
+    fn from(item: G2Affine) -> Self {
+        PublicKeyG2(item)
     }
 }
 
 /// Utility to convert blsttc to blst types
-impl From<PublicKey> for G1Projective {
-    fn from(item: PublicKey) -> Self {
+impl From<PublicKeyG1> for G1Projective {
+    fn from(item: PublicKeyG1) -> Self {
+        item.0.into()
+    }
+}
+
+impl From<PublicKeyG2> for G2Projective {
+    fn from(item: PublicKeyG2) -> Self {
         item.0.into()
     }
 }
 
 /// Utility to convert blst to blsttc types
-impl From<G1Projective> for PublicKey {
+impl From<G1Projective> for PublicKeyG1 {
     fn from(item: G1Projective) -> Self {
-        PublicKey(item.into())
+        PublicKeyG1(item.into())
+    }
+}
+
+impl From<G2Projective> for PublicKeyG2 {
+    fn from(item: G2Projective) -> Self {
+        PublicKeyG2(item.into())
     }
 }
 
 /// Utility to compare between blsttc and blst types
-impl std::cmp::PartialEq<G1Affine> for PublicKey {
+impl std::cmp::PartialEq<G1Affine> for PublicKeyG1 {
     fn eq(&self, other: &G1Affine) -> bool {
         &self.0 == other
     }
 }
 
+impl std::cmp::PartialEq<G2Affine> for PublicKeyG2 {
+    fn eq(&self, other: &G2Affine) -> bool {
+        &self.0 == other
+    }
+}
+
 /// Utility to compare between blsttc and blst types
-impl std::cmp::PartialEq<G1Projective> for PublicKey {
+impl std::cmp::PartialEq<G1Projective> for PublicKeyG1 {
     fn eq(&self, other: &G1Projective) -> bool {
         &G1Projective::from(self.0) == other
     }
 }
 
-impl PublicKey {
+impl std::cmp::PartialEq<G2Projective> for PublicKeyG2 {
+    fn eq(&self, other: &G2Projective) -> bool {
+        &G2Projective::from(self.0) == other
+    }
+}
+
+impl PublicKeyG1 {
     // Utility to check if public key is 0, this is a measure to prevent rogue public key attacks
     fn is_zero(&self) -> bool {
         self.0.is_identity().unwrap_u8() == 1
     }
 
     /// Returns `true` if the signature matches the element of `G2`.
-    pub fn verify_g2<H: Into<G2Affine>>(&self, sig: &Signature, hash: H) -> bool {
+    pub fn verify_g2<H: Into<G2Affine>>(&self, sig: &SignatureG2, hash: H) -> bool {
         !self.is_zero()
             && PEngine::pairing(&self.0, &hash.into())
                 == PEngine::pairing(&G1Affine::generator(), &sig.0)
     }
 
     /// Returns `true` if the signature matches the message.
-    pub fn verify<M: AsRef<[u8]>>(&self, sig: &Signature, msg: M) -> bool {
+    pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureG2, msg: M) -> bool {
         self.verify_g2(sig, hash_g2(msg))
     }
 
@@ -172,13 +236,13 @@ impl PublicKey {
         let index_fr = derivation_index_into_fr(index);
         let mut child_g1 = self.0;
         child_g1.mul_assign(index_fr);
-        PublicKey(child_g1)
+        PublicKeyG1(child_g1)
     }
 
     /// Returns the key with the given representation, if valid.
     pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
         let g1 = g1_from_bytes(bytes)?;
-        Ok(PublicKey(g1))
+        Ok(PublicKeyG1(g1))
     }
 
     /// Returns a byte string representation of the public key.
@@ -199,25 +263,77 @@ impl PublicKey {
     }
 }
 
-/// A public key share.
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub struct PublicKeyShare(PublicKey);
+impl PublicKeyG2 {
+    // Utility to check if public key is 0, this is a measure to prevent rogue public key attacks
+    fn is_zero(&self) -> bool {
+        self.0.is_identity().unwrap_u8() == 1
+    }
 
-impl fmt::Debug for PublicKeyShare {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let uncomp = self.0 .0.to_uncompressed();
-        write!(f, "PublicKeyShare({:0.10})", HexFmt(uncomp))
+    /// Returns `true` if the signature matches the element of `G2`.
+    pub fn verify_g1<H: Into<G1Affine>>(&self, sig: &SignatureG1, hash: H) -> bool {
+        !self.is_zero()
+            && PEngine::pairing(&hash.into(),&self.0)
+            == PEngine::pairing(&sig.0, &G2Affine::generator())
+    }
+
+    /// Returns `true` if the signature matches the message.
+    pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureG1, msg: M) -> bool {
+        self.verify_g1(sig, hash_g1(msg))
+    }
+
+    /// Returns the key with the given representation, if valid.
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+        let g2 = g2_from_bytes(bytes)?;
+        Ok(PublicKeyG2(g2))
+    }
+
+    /// Returns a byte string representation of the public key.
+    pub fn to_bytes(self) -> [u8; SIG_SIZE] {
+        self.0.to_compressed()
+    }
+
+    /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
+    pub fn from_hex(hex: &str) -> Result<Self> {
+        let pk_bytes = hex::decode(hex)?;
+        let pk_bytes: [u8; SIG_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(pk_bytes)
+    }
+
+    /// Serialize this `PublicKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
     }
 }
 
-impl PublicKeyShare {
+/// A public key share.
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct PublicKeyShareG1(pub PublicKeyG1);
+
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+pub struct PublicKeyShareG2(PublicKeyG2);
+
+impl fmt::Debug for PublicKeyShareG1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uncomp = self.0 .0.to_uncompressed();
+        write!(f, "PublicKeyShareG1({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl fmt::Debug for PublicKeyShareG2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uncomp = self.0 .0.to_uncompressed();
+        write!(f, "PublicKeyShareG2({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl PublicKeyShareG1 {
     /// Returns `true` if the signature matches the element of `G2`.
-    pub fn verify_g2<H: Into<G2Affine>>(&self, sig: &SignatureShare, hash: H) -> bool {
+    pub fn verify_g2<H: Into<G2Affine>>(&self, sig: &SignatureShareG2, hash: H) -> bool {
         self.0.verify_g2(&sig.0, hash)
     }
 
     /// Returns `true` if the signature matches the message.
-    pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureShare, msg: M) -> bool {
+    pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureShareG2, msg: M) -> bool {
         self.0.verify(&sig.0, msg)
     }
 
@@ -230,12 +346,12 @@ impl PublicKeyShare {
 
     /// Derives a child public key share for a given index.
     pub fn derive_child(&self, index: &[u8]) -> Self {
-        PublicKeyShare(self.0.derive_child(index))
+        PublicKeyShareG1(self.0.derive_child(index))
     }
 
     /// Returns the key share with the given representation, if valid.
     pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
-        Ok(PublicKeyShare(PublicKey::from_bytes(bytes)?))
+        Ok(PublicKeyShareG1(PublicKeyG1::from_bytes(bytes)?))
     }
 
     /// Returns a byte string representation of the public key share.
@@ -244,43 +360,110 @@ impl PublicKeyShare {
     }
 }
 
+impl PublicKeyShareG2 {
+
+    /// Returns `true` if the signature matches the message.
+    pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureShareG1, msg: M) -> bool {
+        self.0.verify(&sig.0, msg)
+    }
+
+    /// Returns the key share with the given representation, if valid.
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+        Ok(PublicKeyShareG2(PublicKeyG2::from_bytes(bytes)?))
+    }
+
+    /// Returns a byte string representation of the public key share.
+    pub fn to_bytes(self) -> [u8; SIG_SIZE] {
+        self.0.to_bytes()
+    }
+
+}
+
 /// A signature.
 // Note: Random signatures can be generated for testing.
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
-pub struct Signature(#[serde(with = "serde_impl::affine")] G2Affine);
+pub struct SignatureG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 
-impl PartialOrd for Signature {
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct SignatureG2(#[serde(with = "serde_impl::affine")] pub G2Affine);
+
+impl PartialOrd for SignatureG1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Signature {
+impl PartialOrd for SignatureG2 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SignatureG1 {
     fn cmp(&self, other: &Self) -> Ordering {
         cmp_affine(&self.0, &other.0)
     }
 }
 
-impl Distribution<Signature> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Signature {
-        Signature(G2Projective::random(rng).to_affine())
+impl Ord for SignatureG2 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        cmp_affine(&self.0, &other.0)
     }
 }
 
-impl fmt::Debug for Signature {
+impl Distribution<SignatureG1> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureG1 {
+        SignatureG1(G1Projective::random(rng).to_affine())
+    }
+}
+
+impl Distribution<SignatureG2> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureG2 {
+        SignatureG2(G2Projective::random(rng).to_affine())
+    }
+}
+
+impl fmt::Debug for SignatureG1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uncomp = self.0.to_uncompressed();
-        write!(f, "Signature({:0.10})", HexFmt(uncomp))
+        write!(f, "SignatureG1({:0.10})", HexFmt(uncomp))
     }
 }
 
-impl Hash for Signature {
+impl fmt::Debug for SignatureG2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uncomp = self.0.to_uncompressed();
+        write!(f, "SignatureG2({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl Hash for SignatureG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.to_compressed().hash(state);
     }
 }
 
-impl Signature {
+impl Hash for SignatureG2 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_compressed().hash(state);
+    }
+}
+
+impl SignatureG1 {
+
+    /// Returns the signature with the given representation, if valid.
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+        let g1 = g1_from_bytes(bytes)?;
+        Ok(SignatureG1(g1))
+    }
+
+    /// Returns a byte string representation of the signature.
+    pub fn to_bytes(&self) -> [u8; PK_SIZE] {
+        self.0.to_compressed()
+    }
+}
+
+impl SignatureG2 {
     /// Returns `true` if the signature contains an odd number of ones.
     pub fn parity(&self) -> bool {
         let uncomp = self.0.to_uncompressed();
@@ -291,7 +474,7 @@ impl Signature {
     /// Returns the signature with the given representation, if valid.
     pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
         let g2 = g2_from_bytes(bytes)?;
-        Ok(Signature(g2))
+        Ok(SignatureG2(g2))
     }
 
     /// Returns a byte string representation of the signature.
@@ -302,26 +485,54 @@ impl Signature {
 
 /// A signature share.
 // Note: Random signature shares can be generated for testing.
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
-pub struct SignatureShare(pub Signature);
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub struct SignatureShareG1(pub SignatureG1);
 
-impl Distribution<SignatureShare> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureShare {
-        SignatureShare(rng.gen())
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct SignatureShareG2(pub SignatureG2);
+
+impl Distribution<SignatureShareG1> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureShareG1 {
+        SignatureShareG1(rng.gen())
     }
 }
 
-impl fmt::Debug for SignatureShare {
+impl Distribution<SignatureShareG2> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureShareG2 {
+        SignatureShareG2(rng.gen())
+    }
+}
+
+impl fmt::Debug for SignatureShareG1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uncomp = (self.0).0.to_uncompressed();
-        write!(f, "SignatureShare({:0.10})", HexFmt(uncomp))
+        write!(f, "SignatureShareG1({:0.10})", HexFmt(uncomp))
     }
 }
 
-impl SignatureShare {
+impl fmt::Debug for SignatureShareG2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let uncomp = (self.0).0.to_uncompressed();
+        write!(f, "SignatureShareG2({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl SignatureShareG1 {
+    /// Returns the signature share with the given representation, if valid.
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+        Ok(SignatureShareG1(SignatureG1::from_bytes(bytes)?))
+    }
+
+    /// Returns a byte string representation of the signature share.
+    pub fn to_bytes(&self) -> [u8; PK_SIZE] {
+        self.0.to_bytes()
+    }
+}
+
+impl SignatureShareG2 {
     /// Returns the signature share with the given representation, if valid.
     pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
-        Ok(SignatureShare(Signature::from_bytes(bytes)?))
+        Ok(SignatureShareG2(SignatureG2::from_bytes(bytes)?))
     }
 
     /// Returns a byte string representation of the signature share.
@@ -339,7 +550,7 @@ impl SignatureShare {
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct SecretKey(Fr);
+pub struct SecretKey(pub Fr);
 
 impl Zeroize for SecretKey {
     fn zeroize(&mut self) {
@@ -419,18 +630,26 @@ impl SecretKey {
     }
 
     /// Returns the matching public key.
-    pub fn public_key(&self) -> PublicKey {
-        PublicKey((G1Affine::generator() * self.0).to_affine())
+    pub fn public_key(&self) -> PublicKeyG1 {
+        PublicKeyG1((G1Affine::generator() * self.0).to_affine())
     }
 
     /// Signs the given element of `G2`.
-    pub fn sign_g2<H: Into<G2Affine>>(&self, hash: H) -> Signature {
-        Signature(hash.into().mul(self.0).to_affine())
+    pub fn sign_g2<H: Into<G2Affine>>(&self, hash: H) -> SignatureG2 {
+        SignatureG2(hash.into().mul(self.0).to_affine())
+    }
+
+    pub fn sign_g1<H: Into<G1Affine>>(&self, hash: H) -> SignatureG1 {
+        SignatureG1(hash.into().mul(self.0).to_affine())
     }
 
     /// Signs the given message.
-    pub fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Signature {
+    pub fn sign_to_g2<M: AsRef<[u8]>>(&self, msg: M) -> SignatureG2 {
         self.sign_g2(hash_g2(msg))
+    }
+
+    pub fn sign_to_g1<M: AsRef<[u8]>>(&self, msg: M) -> SignatureG1 {
+        self.sign_g1(hash_g1(msg))
     }
 
     /// Converts the secret key to big endian bytes
@@ -488,7 +707,7 @@ impl SecretKey {
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct SecretKeyShare(SecretKey);
+pub struct SecretKeyShare(pub SecretKey);
 
 /// Can be used to create a new random instance of `SecretKeyShare`. This is only useful for testing
 /// purposes as such a key has not been derived from a `SecretKeySet`.
@@ -517,18 +736,17 @@ impl SecretKeyShare {
     }
 
     /// Returns the matching public key share.
-    pub fn public_key_share(&self) -> PublicKeyShare {
-        PublicKeyShare(self.0.public_key())
-    }
-
-    /// Signs the given element of `G2`.
-    pub fn sign_g2<H: Into<G2Affine>>(&self, hash: H) -> SignatureShare {
-        SignatureShare(self.0.sign_g2(hash))
+    pub fn public_key_share(&self) -> PublicKeyShareG1 {
+        PublicKeyShareG1(self.0.public_key())
     }
 
     /// Signs the given message.
-    pub fn sign<M: AsRef<[u8]>>(&self, msg: M) -> SignatureShare {
-        SignatureShare(self.0.sign(msg))
+    pub fn sign_g2<M: AsRef<[u8]>>(&self, msg: M) -> SignatureShareG2 {
+        SignatureShareG2(self.0.sign_to_g2(msg))
+    }
+
+    pub fn sign_g1<M: AsRef<[u8]>>(&self, msg: M) -> SignatureShareG1 {
+        SignatureShareG1(self.0.sign_to_g1(msg))
     }
 
     /// Returns a decryption share, or `None`, if the ciphertext isn't valid.
@@ -674,19 +892,32 @@ impl DecryptionShare {
 
 /// A public key and an associated set of public key shares.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub struct PublicKeySet {
+pub struct PublicKeySetG1 {
     /// The coefficients of a polynomial whose value at `0` is the "master key", and value at
     /// `i + 1` is key share number `i`.
-    commit: Commitment,
+    commit: CommitmentG1,
 }
 
-impl Hash for PublicKeySet {
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub struct PublicKeySetG2 {
+    /// The coefficients of a polynomial whose value at `0` is the "master key", and value at
+    /// `i + 1` is key share number `i`.
+    commit: CommitmentG2,
+}
+
+impl Hash for PublicKeySetG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.commit.hash(state);
     }
 }
 
-impl fmt::Debug for PublicKeySet {
+impl Hash for PublicKeySetG2 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.commit.hash(state);
+    }
+}
+
+impl fmt::Debug for PublicKeySetG1 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PublicKeySet")
             .field("public_key", &self.public_key())
@@ -695,13 +926,28 @@ impl fmt::Debug for PublicKeySet {
     }
 }
 
-impl From<Commitment> for PublicKeySet {
-    fn from(commit: Commitment) -> PublicKeySet {
-        PublicKeySet { commit }
+impl fmt::Debug for PublicKeySetG2 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("PublicKeySetG2")
+            .field("public_key", &self.public_key())
+            .field("threshold", &self.threshold())
+            .finish()
     }
 }
 
-impl PublicKeySet {
+impl From<CommitmentG1> for PublicKeySetG1 {
+    fn from(commit: CommitmentG1) -> PublicKeySetG1 {
+        PublicKeySetG1 { commit }
+    }
+}
+
+impl From<CommitmentG2> for PublicKeySetG2 {
+    fn from(commit: CommitmentG2) -> PublicKeySetG2 {
+        PublicKeySetG2 { commit }
+    }
+}
+
+impl PublicKeySetG1 {
     /// Returns the threshold `t`: any set of `t + 1` signature shares can be combined into a full
     /// signature.
     pub fn threshold(&self) -> usize {
@@ -709,14 +955,14 @@ impl PublicKeySet {
     }
 
     /// Returns the public key.
-    pub fn public_key(&self) -> PublicKey {
-        PublicKey(self.commit.coeff[0])
+    pub fn public_key(&self) -> PublicKeyG1 {
+        PublicKeyG1(self.commit.coeff[0])
     }
 
     /// Returns the `i`-th public key share.
-    pub fn public_key_share<T: IntoFr>(&self, i: T) -> PublicKeyShare {
+    pub fn public_key_share<T: IntoFr>(&self, i: T) -> PublicKeyShareG1 {
         let value = self.commit.evaluate(into_fr_plus_1(i));
-        PublicKeyShare(PublicKey(value))
+        PublicKeyShareG1(PublicKeyG1(value))
     }
 
     /// Combines the shares into a signature that can be verified with the main public key.
@@ -739,7 +985,7 @@ impl PublicKeySet {
     /// let msg = "Happy birthday! If this is signed, at least four people remembered!";
     ///
     /// // Create four signature shares for the message.
-    /// let sig_shares: BTreeMap<_, _> = (0..4).map(|i| (i, sk_shares[i].sign(msg))).collect();
+    /// let sig_shares: BTreeMap<_, _> = (0..4).map(|i| (i, sk_shares[i].sign_g2(msg))).collect();
     ///
     /// // Validate the signature shares.
     /// for (i, sig_share) in &sig_shares {
@@ -747,15 +993,15 @@ impl PublicKeySet {
     /// }
     ///
     /// // Combine them to produce the main signature.
-    /// let sig = pk_set.combine_signatures(&sig_shares).expect("not enough shares");
+    /// let sig = pk_set.combine_g2_signatures(&sig_shares).expect("not enough shares");
     ///
     /// // Validate the main signature. If the shares were valid, this can't fail.
     /// assert!(pk_set.public_key().verify(&sig, msg));
     /// ```
-    pub fn combine_signatures<T, I, S: Borrow<SignatureShare>>(
+    pub fn combine_g2_signatures<T, I, S: Borrow<SignatureShareG2>>(
         &self,
         shares: I,
-    ) -> Result<Signature>
+    ) -> Result<SignatureG2>
     where
         I: IntoIterator<Item = (T, S)>,
         T: IntoFr,
@@ -763,8 +1009,40 @@ impl PublicKeySet {
         let samples = shares
             .into_iter()
             .map(|(i, share)| (i, G2Projective::from((share.borrow().0).0)));
-        Ok(Signature(
+        Ok(SignatureG2(
             interpolate(self.commit.degree(), samples)?.to_affine(),
+        ))
+    }
+
+    pub fn combine_g1_signatures<T, I, S: Borrow<SignatureShareG1>>(
+        &self,
+        shares: I,
+    ) -> Result<SignatureG1>
+        where
+            I: IntoIterator<Item = (T, S)>,
+            T: IntoFr,
+    {
+        let samples = shares
+            .into_iter()
+            .map(|(i, share)| (i, G1Projective::from((share.borrow().0).0)));
+        Ok(SignatureG1(
+            interpolate(self.commit.degree(), samples)?.to_affine(),
+        ))
+    }
+
+    pub fn combine_g1_signatures_parallelized<T, I, S: Borrow<SignatureShareG1>>(
+        &self,
+        shares: I,
+    ) -> Result<SignatureG1>
+        where
+            I: IntoIterator<Item = (T, S)>,
+            T: IntoFr,
+    {
+        let samples = shares
+            .into_iter()
+            .map(|(i, share)| (i, G1Projective::from((share.borrow().0).0)));
+        Ok(SignatureG1(
+            interpolate_parallelized(self.commit.degree(), samples)?.to_affine(),
         ))
     }
 
@@ -794,7 +1072,7 @@ impl PublicKeySet {
                 child_coeff
             })
             .collect();
-        PublicKeySet::from(Commitment::from(child_coeffs))
+        PublicKeySetG1::from(CommitmentG1::from(child_coeffs))
     }
 
     /// Serializes to big endian bytes
@@ -804,8 +1082,54 @@ impl PublicKeySet {
 
     /// Deserializes from big endian bytes
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
-        let commit = Commitment::from_bytes(bytes)?;
-        Ok(PublicKeySet { commit })
+        let commit = CommitmentG1::from_bytes(bytes)?;
+        Ok(PublicKeySetG1 { commit })
+    }
+}
+
+impl PublicKeySetG2 {
+    /// Returns the threshold `t`: any set of `t + 1` signature shares can be combined into a full
+    /// signature.
+    pub fn threshold(&self) -> usize {
+        self.commit.degree()
+    }
+
+    /// Returns the public key.
+    pub fn public_key(&self) -> PublicKeyG2 {
+        PublicKeyG2(self.commit.coeff[0])
+    }
+
+    /// Returns the `i`-th public key share.
+    pub fn public_key_share<T: IntoFr>(&self, i: T) -> PublicKeyShareG2 {
+        let value = self.commit.evaluate(into_fr_plus_1(i));
+        PublicKeyShareG2(PublicKeyG2(value))
+    }
+
+    pub fn combine_signatures<T, I, S: Borrow<SignatureShareG1>>(
+        &self,
+        shares: I,
+    ) -> Result<SignatureG1>
+        where
+            I: IntoIterator<Item = (T, S)>,
+            T: IntoFr,
+    {
+        let samples = shares
+            .into_iter()
+            .map(|(i, share)| (i, G1Projective::from((share.borrow().0).0)));
+        Ok(SignatureG1(
+            interpolate(self.commit.degree(), samples)?.to_affine(),
+        ))
+    }
+
+    /// Serializes to big endian bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.commit.to_bytes()
+    }
+
+    /// Deserializes from big endian bytes
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let commit = CommitmentG2::from_bytes(bytes)?;
+        Ok(PublicKeySetG2 { commit })
     }
 }
 
@@ -856,9 +1180,15 @@ impl SecretKeySet {
     }
 
     /// Returns the corresponding public key set. That information can be shared publicly.
-    pub fn public_keys(&self) -> PublicKeySet {
-        PublicKeySet {
+    pub fn public_keys(&self) -> PublicKeySetG1 {
+        PublicKeySetG1 {
             commit: self.poly.commitment(),
+        }
+    }
+
+    pub fn public_keys_g2(&self) -> PublicKeySetG2 {
+        PublicKeySetG2 {
+            commit: self.poly.commitment_g2(),
         }
     }
 
@@ -908,6 +1238,10 @@ impl SecretKeySet {
 /// Returns a hash of the given message in `G2`.
 pub fn hash_g2<M: AsRef<[u8]>>(msg: M) -> G2Affine {
     G2Projective::hash_to_curve(msg.as_ref(), DST, &[]).to_affine()
+}
+
+pub fn hash_g1<M: AsRef<[u8]>>(msg: M) -> G1Affine {
+    G1Projective::hash_to_curve(msg.as_ref(), DST, &[]).to_affine()
 }
 
 /// Returns a hash of the group element and message, in the second group.
@@ -992,6 +1326,71 @@ where
     Ok(result)
 }
 
+/// Given a list of `t + 1` samples `(i - 1, f(i) * g)` for a polynomial `f` of degree `t`, and a
+/// group generator `g`, returns `f(0) * g`.
+fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> Result<C>
+    where
+        C: Curve<Scalar = Fr>,
+        I: IntoIterator<Item = (T, B)>,
+        T: IntoFr,
+        B: Borrow<C> + Send + Sync,
+{
+    let samples: Vec<_> = items
+        .into_iter()
+        .take(t + 1)
+        .map(|(i, sample)| (into_fr_plus_1(i), sample))
+        .collect();
+    if samples.len() <= t {
+        return Err(Error::NotEnoughShares {
+            current: samples.len(),
+            required: t + 1,
+        });
+    }
+
+    if t == 0 {
+        return Ok(*samples[0].1.borrow());
+    }
+
+    // Compute the products `x_prod[i]` of all but the `i`-th entry.
+    let mut x_prod: Vec<C::Scalar> = Vec::with_capacity(t);
+    let mut tmp = C::Scalar::one();
+    x_prod.push(tmp);
+    for (x, _) in samples.iter().take(t) {
+        tmp.mul_assign(x);
+        x_prod.push(tmp);
+    }
+    tmp = C::Scalar::one();
+    for (i, (x, _)) in samples[1..].iter().enumerate().rev() {
+        tmp.mul_assign(x);
+        x_prod[i].mul_assign(&tmp);
+    }
+
+    // Step 3: Compute the intermediate results in parallel
+    let intermediate_results: Vec<C> = x_prod.into_par_iter().zip(&samples).filter_map(|(mut l0, (x, sample))| {
+        let mut denom = C::Scalar::one();
+        for (x0, _) in samples.iter().filter(|(x0, _)| x0 != x) {
+            let mut diff = *x0;
+            diff.sub_assign(x);
+            denom.mul_assign(&diff);
+        }
+        let denom_inv = denom.invert();
+        if denom_inv.is_none().into() {
+            // Handle error, return None
+            return None;
+        }
+        l0.mul_assign(&denom_inv.unwrap());
+        Some(sample.borrow().mul(l0))
+    }).collect();
+
+// Step 4: Aggregate the results
+    let mut result = C::identity();
+    for item in intermediate_results {
+        result.add_assign(&item);
+    }
+
+    Ok(result)
+}
+
 fn into_fr_plus_1<I: IntoFr>(x: I) -> Fr {
     let mut result = Fr::one();
     result.add_assign(&x.into_fr());
@@ -1040,9 +1439,9 @@ mod tests {
         let pk0 = sk0.public_key();
         let msg0 = b"Real news";
         let msg1 = b"Fake news";
-        assert!(pk0.verify(&sk0.sign(msg0), msg0));
-        assert!(!pk0.verify(&sk1.sign(msg0), msg0)); // Wrong key.
-        assert!(!pk0.verify(&sk0.sign(msg1), msg0)); // Wrong message.
+        assert!(pk0.verify(&sk0.sign_to_g2(msg0), msg0));
+        assert!(!pk0.verify(&sk1.sign_to_g2(msg0), msg0)); // Wrong key.
+        assert!(!pk0.verify(&sk0.sign_to_g2(msg1), msg0)); // Wrong message.
         Ok(())
     }
 
@@ -1074,7 +1473,7 @@ mod tests {
         let sigs: Vec<(_, _)> = [5, 8, 7, 10]
             .iter()
             .map(|&i| {
-                let sig = sk_set.secret_key_share(i).sign(msg);
+                let sig = sk_set.secret_key_share(i).sign_g2(msg);
                 (i, sig)
             })
             .collect();
@@ -1085,19 +1484,19 @@ mod tests {
         }
 
         // Combined, they produce a signature matching the main public key.
-        let sig = pk_set.combine_signatures(sigs).expect("signatures match");
+        let sig = pk_set.combine_g2_signatures(sigs).expect("signatures match");
         assert!(pk_set.public_key().verify(&sig, msg));
 
         // A different set of signatories produces the same signature.
         let sigs2: BTreeMap<_, _> = [42, 43, 44, 45]
             .iter()
             .map(|&i| {
-                let sig = sk_set.secret_key_share(i).sign(msg);
+                let sig = sk_set.secret_key_share(i).sign_g2(msg);
                 (i, sig)
             })
             .collect();
 
-        let sig2 = pk_set.combine_signatures(&sigs2).expect("signatures match");
+        let sig2 = pk_set.combine_g2_signatures(&sigs2).expect("signatures match");
         assert_eq!(sig, sig2);
 
         Ok(())
@@ -1215,11 +1614,11 @@ mod tests {
     #[test]
     fn test_from_to_bytes() -> Result<()> {
         let sk: SecretKey = random();
-        let sig = sk.sign("Please sign here: ______");
+        let sig = sk.sign_to_g2("Please sign here: ______");
         let pk = sk.public_key();
-        let pk2 = PublicKey::from_bytes(pk.to_bytes()).expect("invalid pk representation");
+        let pk2 = PublicKeyG1::from_bytes(pk.to_bytes()).expect("invalid pk representation");
         assert_eq!(pk, pk2);
-        let sig2 = Signature::from_bytes(sig.to_bytes()).expect("invalid sig representation");
+        let sig2 = SignatureG2::from_bytes(sig.to_bytes()).expect("invalid sig representation");
         assert_eq!(sig, sig2);
         let cipher = sk.public_key().encrypt(b"secret msg");
         let cipher2 =
@@ -1237,9 +1636,9 @@ mod tests {
         assert_eq!(sk, sk2);
         let pk_hex = "85695fcbc06cc4c4c9451f4dce21cbf8de3e5a13bf48f44cdbb18e203\
                       8ba7b8bb1632d7911ef1e2e08749bddbf165352";
-        let pk = PublicKey::from_hex(pk_hex)?;
+        let pk = PublicKeyG1::from_hex(pk_hex)?;
         let pk2_hex = pk.to_hex();
-        let pk2 = PublicKey::from_hex(&pk2_hex)?;
+        let pk2 = PublicKeyG1::from_hex(&pk2_hex)?;
         assert_eq!(pk, pk2);
         Ok(())
     }
@@ -1247,10 +1646,10 @@ mod tests {
     #[test]
     fn test_serde() -> Result<()> {
         let sk = SecretKey::random();
-        let sig = sk.sign("Please sign here: ______");
+        let sig = sk.sign_to_g2("Please sign here: ______");
         let pk = sk.public_key();
         let ser_pk = bincode::serialize(&pk).expect("serialize public key");
-        let deser_pk: PublicKey = bincode::deserialize(&ser_pk).expect("deserialize public key");
+        let deser_pk: PublicKeyG1 = bincode::deserialize(&ser_pk).expect("deserialize public key");
         assert_eq!(ser_pk.len(), PK_SIZE);
         assert_eq!(pk, deser_pk);
         let ser_sig = bincode::serialize(&sig).expect("serialize signature");
@@ -1313,7 +1712,7 @@ mod tests {
         // secret key gives same public key
         assert_eq!(pkbytes, pk.to_bytes());
         // signature matches test vector
-        let sig = sk.sign(msgbytes);
+        let sig = sk.sign_to_g2(msgbytes);
         assert_eq!(sigbytes, sig.to_bytes());
         // signature can be verified
         assert!(pk.verify(&sig, msgbytes));
@@ -1369,7 +1768,7 @@ mod tests {
         }
         // from bytes gives original pk set
         let restored_pk_set =
-            PublicKeySet::from_bytes(pk_set_bytes).expect("invalid public key set bytes");
+            PublicKeySetG1::from_bytes(pk_set_bytes).expect("invalid public key set bytes");
         assert_eq!(pk_set, restored_pk_set);
     }
 
@@ -1438,7 +1837,7 @@ mod tests {
         for vector in vectors {
             // read PublicKeyShare from hex
             let pks_bytes = hex::decode(vector[0])?;
-            let pks = PublicKeySet::from_bytes(pks_bytes).expect("Invalid public key set bytes");
+            let pks = PublicKeySetG1::from_bytes(pks_bytes).expect("Invalid public key set bytes");
             // check public key
             let pk = pks.public_key();
             let pk_hex = &format!("{}", HexFmt(&pk.to_bytes()));
@@ -1851,6 +2250,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn test_sk_set_child_sig() -> Result<()> {
         // combining signatures from child keyshares produces
         // a valid signature for the child public key set
@@ -1881,14 +2281,14 @@ mod tests {
         let msg = "Totally real news";
         let mut child_sig_shares = BTreeMap::default();
         for (i, child_key_share) in child_key_shares.iter() {
-            let child_sig_share = child_key_share.sign(msg);
+            let child_sig_share = child_key_share.sign_g2(msg);
             child_sig_shares.insert(i, child_sig_share);
         }
         // Combining the child shares creates a valid signature for the child
         // public key set.
         let pks_child = pks.derive_child(&index);
         let sig = pks_child
-            .combine_signatures(&child_sig_shares)
+            .combine_g2_signatures(&child_sig_shares)
             .map_err(|err| eyre!("signatures match: {}", err))?;
         assert!(pks_child.public_key().verify(&sig, msg));
 
@@ -1904,11 +2304,11 @@ mod tests {
         assert!(!pk.is_zero());
 
         // Rogue 0 pubkey
-        let rogue_public_key = PublicKey(G1Affine::identity());
+        let rogue_public_key = PublicKeyG1(G1Affine::identity());
         assert!(rogue_public_key.is_zero());
 
         // Rogue 0 sig
-        let rogue_sig = Signature(G2Affine::identity());
+        let rogue_sig = SignatureG2(G2Affine::identity());
 
         // just any hash will do
         let hash = hash_g2(b"anything");

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use blsttc::{
-    Ciphertext, DecryptionShare, PublicKey, PublicKeySet, PublicKeyShare, SecretKeySet,
+    Ciphertext, DecryptionShare, PublicKeyG1, PublicKeySetG1, PublicKeyShareG1, SecretKeySet,
     SecretKeyShare,
 };
 
@@ -11,7 +11,7 @@ use blsttc::{
 // actor their respective share of the secret-key.
 struct SecretSociety {
     actors: Vec<Actor>,
-    pk_set: PublicKeySet,
+    pk_set: PublicKeySetG1,
 }
 
 impl SecretSociety {
@@ -39,7 +39,7 @@ impl SecretSociety {
     }
 
     // The secret society publishes its public-key to a publicly accessible key server.
-    fn publish_public_key(&self) -> PublicKey {
+    fn publish_public_key(&self) -> PublicKeyG1 {
         self.pk_set.public_key()
     }
 
@@ -66,12 +66,12 @@ impl SecretSociety {
 struct Actor {
     id: usize,
     sk_share: SecretKeyShare,
-    pk_share: PublicKeyShare,
+    pk_share: PublicKeyShareG1,
     msg_inbox: Option<Ciphertext>,
 }
 
 impl Actor {
-    fn new(id: usize, sk_share: SecretKeyShare, pk_share: PublicKeyShare) -> Self {
+    fn new(id: usize, sk_share: SecretKeyShare, pk_share: PublicKeyShareG1) -> Self {
         Actor {
             id,
             sk_share,
@@ -89,7 +89,7 @@ fn send_msg(actor: &mut Actor, enc_msg: Ciphertext) {
 // A meeting of the secret society. At this meeting, actors collaborate to decrypt a shared
 // ciphertext.
 struct DecryptionMeeting {
-    pk_set: PublicKeySet,
+    pk_set: PublicKeySetG1,
     ciphertext: Option<Ciphertext>,
     dec_shares: BTreeMap<usize, DecryptionShare>,
 }

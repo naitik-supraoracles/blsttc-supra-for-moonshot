@@ -1,17 +1,17 @@
 use bincode::{deserialize, serialize};
-use blsttc::{PublicKey, SecretKey, Signature};
+use blsttc::{PublicKeyG1, SecretKey, SignatureG2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 struct SignedMsg {
     msg: Vec<u8>,
-    sig: Signature,
+    sig: SignatureG2,
 }
 
 #[derive(Debug)]
 struct KeyPair {
     sk: SecretKey,
-    pk: PublicKey,
+    pk: PublicKeyG1,
 }
 
 impl KeyPair {
@@ -22,7 +22,7 @@ impl KeyPair {
     }
 
     fn create_signed_msg(&self, msg: &[u8]) -> SignedMsg {
-        let sig = self.sk.sign(msg);
+        let sig = self.sk.sign_to_g2(msg);
         let msg = msg.to_vec();
         SignedMsg { msg, sig }
     }

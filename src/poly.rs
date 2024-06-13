@@ -23,6 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::iter::repeat_with;
 use std::ops::{AddAssign, Mul, MulAssign, SubAssign};
 use std::{cmp, iter, ops};
+use blstrs::{G2Affine, G2Projective};
 
 use group::{prime::PrimeCurveAffine, Curve, Group};
 use rand::Rng;
@@ -30,11 +31,11 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::cmp_pairing::cmp_affine;
-use crate::convert::{fr_from_bytes, g1_from_bytes};
+use crate::convert::{fr_from_bytes, g1_from_bytes, g2_from_bytes};
 use crate::error::{Error, Result};
 use crate::into_fr::IntoFr;
 use crate::secret::clear_fr;
-use crate::{Field, Fr, G1Affine, G1Projective, PK_SIZE, SK_SIZE};
+use crate::{Field, Fr, G1Affine, G1Projective, PK_SIZE, SIG_SIZE, SK_SIZE};
 
 /// A univariate polynomial in the prime field.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -370,10 +371,17 @@ impl Poly {
     }
 
     /// Returns the corresponding commitment.
-    pub fn commitment(&self) -> Commitment {
+    pub fn commitment(&self) -> CommitmentG1 {
         let to_g1 = |c: &Fr| G1Affine::generator().mul(c).to_affine();
-        Commitment {
+        CommitmentG1 {
             coeff: self.coeff.iter().map(to_g1).collect(),
+        }
+    }
+
+    pub fn commitment_g2(&self) -> CommitmentG2 {
+        let to_g2 = |c: &Fr| G2Affine::generator().mul(c).to_affine();
+        CommitmentG2 {
+            coeff: self.coeff.iter().map(to_g2).collect(),
         }
     }
 
@@ -467,26 +475,45 @@ impl Poly {
 
 /// A commitment to a univariate polynomial.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Commitment {
+pub struct CommitmentG1 {
     /// The coefficients of the polynomial.
     #[serde(with = "super::serde_impl::affine_vec")]
     pub(super) coeff: Vec<G1Affine>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommitmentG2 {
+    /// The coefficients of the polynomial.
+    #[serde(with = "super::serde_impl::affine_vec")]
+    pub(super) coeff: Vec<G2Affine>,
+}
+
 /// Creates a new `Commitment` instance
-impl From<Vec<G1Affine>> for Commitment {
+impl From<Vec<G1Affine>> for CommitmentG1 {
     fn from(coeff: Vec<G1Affine>) -> Self {
-        Commitment { coeff }
+        CommitmentG1 { coeff }
     }
 }
 
-impl PartialOrd for Commitment {
+impl From<Vec<G2Affine>> for CommitmentG2 {
+    fn from(coeff: Vec<G2Affine>) -> Self {
+        CommitmentG2 { coeff }
+    }
+}
+
+impl PartialOrd for CommitmentG1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Commitment {
+impl PartialOrd for CommitmentG2 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CommitmentG1 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.coeff.len().cmp(&other.coeff.len()).then_with(|| {
             self.coeff
@@ -498,7 +525,19 @@ impl Ord for Commitment {
     }
 }
 
-impl Hash for Commitment {
+impl Ord for CommitmentG2 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.coeff.len().cmp(&other.coeff.len()).then_with(|| {
+            self.coeff
+                .iter()
+                .zip(&other.coeff)
+                .find(|(x, y)| x != y)
+                .map_or(Ordering::Equal, |(x, y)| cmp_affine(x, y))
+        })
+    }
+}
+
+impl Hash for CommitmentG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.coeff.len().hash(state);
         for c in &self.coeff {
@@ -507,7 +546,16 @@ impl Hash for Commitment {
     }
 }
 
-impl<B: Borrow<Commitment>> ops::AddAssign<B> for Commitment {
+impl Hash for CommitmentG2 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.coeff.len().hash(state);
+        for c in &self.coeff {
+            c.to_compressed().hash(state);
+        }
+    }
+}
+
+impl<B: Borrow<CommitmentG1>> ops::AddAssign<B> for CommitmentG1 {
     fn add_assign(&mut self, rhs: B) {
         let len = cmp::max(self.coeff.len(), rhs.borrow().coeff.len());
         self.coeff.resize(len, G1Affine::identity());
@@ -518,24 +566,52 @@ impl<B: Borrow<Commitment>> ops::AddAssign<B> for Commitment {
     }
 }
 
-impl<'a, B: Borrow<Commitment>> ops::Add<B> for &'a Commitment {
-    type Output = Commitment;
+impl<B: Borrow<CommitmentG2>> ops::AddAssign<B> for CommitmentG2 {
+    fn add_assign(&mut self, rhs: B) {
+        let len = cmp::max(self.coeff.len(), rhs.borrow().coeff.len());
+        self.coeff.resize(len, G2Affine::identity());
+        for (self_c, rhs_c) in self.coeff.iter_mut().zip(&rhs.borrow().coeff) {
+            *self_c = (*self_c + G2Projective::from(rhs_c)).to_affine();
+        }
+        self.remove_zeros();
+    }
+}
 
-    fn add(self, rhs: B) -> Commitment {
+impl<'a, B: Borrow<CommitmentG1>> ops::Add<B> for &'a CommitmentG1 {
+    type Output = CommitmentG1;
+
+    fn add(self, rhs: B) -> CommitmentG1 {
         (*self).clone() + rhs
     }
 }
 
-impl<B: Borrow<Commitment>> ops::Add<B> for Commitment {
-    type Output = Commitment;
+impl<'a, B: Borrow<CommitmentG2>> ops::Add<B> for &'a CommitmentG2 {
+    type Output = CommitmentG2;
 
-    fn add(mut self, rhs: B) -> Commitment {
+    fn add(self, rhs: B) -> CommitmentG2 {
+        (*self).clone() + rhs
+    }
+}
+
+impl<B: Borrow<CommitmentG1>> ops::Add<B> for CommitmentG1 {
+    type Output = CommitmentG1;
+
+    fn add(mut self, rhs: B) -> CommitmentG1 {
         self += rhs;
         self
     }
 }
 
-impl Commitment {
+impl<B: Borrow<CommitmentG2>> ops::Add<B> for CommitmentG2 {
+    type Output = CommitmentG2;
+
+    fn add(mut self, rhs: B) -> CommitmentG2 {
+        self += rhs;
+        self
+    }
+}
+
+impl CommitmentG1 {
     /// Returns the polynomial's degree.
     pub fn degree(&self) -> usize {
         self.coeff.len() - 1
@@ -583,7 +659,71 @@ impl Commitment {
             let g1 = g1_from_bytes(g1_bytes)?;
             c.push(g1);
         }
-        Ok(Commitment { coeff: c })
+        Ok(CommitmentG1 { coeff: c })
+    }
+
+    /// Removes all trailing zero coefficients.
+    fn remove_zeros(&mut self) {
+        let zeros = self
+            .coeff
+            .iter()
+            .rev()
+            .take_while(|c| bool::from(c.is_identity()))
+            .count();
+        let len = self.coeff.len() - zeros;
+        self.coeff.truncate(len)
+    }
+}
+
+impl CommitmentG2 {
+    /// Returns the polynomial's degree.
+    pub fn degree(&self) -> usize {
+        self.coeff.len() - 1
+    }
+
+    /// Returns the `i`-th public key share.
+    pub fn evaluate<T: IntoFr>(&self, i: T) -> G2Affine {
+        let mut result = match self.coeff.last() {
+            None => return G2Affine::identity(),
+            Some(c) => G2Projective::from(c),
+        };
+        let x = i.into_fr();
+        for c in self.coeff.iter().rev().skip(1) {
+            result.mul_assign(x);
+            result.add_assign(c);
+        }
+        result.to_affine()
+    }
+
+    /// Serializes to big endian bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let coeff_size = self.coeff.len();
+        let bytes_size = coeff_size * SIG_SIZE;
+        let mut commit_bytes = vec![0; bytes_size];
+        for i in 0..coeff_size {
+            let g1 = self.coeff[i];
+            let g1_bytes = g1.to_compressed();
+            let g1_size = g1_bytes.len();
+            for j in 0..g1_size {
+                commit_bytes[i * SIG_SIZE + j] = g1_bytes[j];
+            }
+        }
+        commit_bytes
+    }
+
+    /// Deserializes from big endian bytes
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let mut c: Vec<G2Affine> = vec![];
+        let coeff_size = bytes.len() / SIG_SIZE;
+        for i in 0..coeff_size {
+            let mut g2_bytes = [0; SIG_SIZE];
+            for j in 0..SIG_SIZE {
+                g2_bytes[j] = bytes[i * SIG_SIZE + j];
+            }
+            let g1 = g2_from_bytes(g2_bytes)?;
+            c.push(g1);
+        }
+        Ok(CommitmentG2 { coeff: c })
     }
 
     /// Removes all trailing zero coefficients.
@@ -825,7 +965,7 @@ impl BivarCommitment {
     }
 
     /// Returns the `x`-th row, as a commitment to a univariate polynomial.
-    pub fn row<T: IntoFr>(&self, x: T) -> Commitment {
+    pub fn row<T: IntoFr>(&self, x: T) -> CommitmentG1 {
         let x_pow = self.powers(x);
         let coeff: Vec<G1Affine> = (0..=self.degree)
             .map(|i| {
@@ -839,7 +979,7 @@ impl BivarCommitment {
                 result.to_affine()
             })
             .collect();
-        Commitment { coeff }
+        CommitmentG1 { coeff }
     }
 
     /// Returns the `0`-th to `degree`-th power of `x`.
@@ -1069,7 +1209,7 @@ mod tests {
         }
         // from bytes gives original commitment
         let restored_commitment =
-            Commitment::from_bytes(commitment_bytes).expect("invalid commitment bytes");
+            CommitmentG1::from_bytes(commitment_bytes).expect("invalid commitment bytes");
         assert_eq!(commitment, restored_commitment);
         // for vectors see PublicKeySet
     }
