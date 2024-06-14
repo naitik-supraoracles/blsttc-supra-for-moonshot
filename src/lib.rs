@@ -1407,7 +1407,7 @@ impl<C> NewtonInterpolation<C>
     where
         C: Curve<Scalar = Fr>,
 {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             x_points: Vec::new(),
             table: vec![vec![],vec![]],
