@@ -1392,7 +1392,7 @@ fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> Result<C>
 }
 
 // Struct to hold the Newton interpolation state
-struct NewtonInterpolation<C>
+pub struct NewtonInterpolation<C>
     where
         C: Curve<Scalar = Fr>,
 {
@@ -1417,7 +1417,7 @@ impl<C> NewtonInterpolation<C>
         }
     }
 
-    fn add_point<T>(&mut self, x: T, y: C) -> std::result::Result<(), Error>
+    pub fn add_point<T>(&mut self, x: T, y: C) -> std::result::Result<(), Error>
         where
             T: Into<Fr>,
     {
@@ -1457,7 +1457,7 @@ impl<C> NewtonInterpolation<C>
         self.value_at_zero.add_assign(self.coeff_term * self.x_term);
     }
 
-    fn value_at_zero(&self) -> C {
+    pub fn value_at_zero(&self) -> C {
         self.value_at_zero
     }
 }
