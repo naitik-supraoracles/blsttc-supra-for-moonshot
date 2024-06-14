@@ -25,7 +25,7 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::{AddAssign, Mul, MulAssign, SubAssign};
+use std::ops::{AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 use group::{ff::Field, prime::PrimeCurveAffine, Curve, Group};
 use hex_fmt::HexFmt;
@@ -1389,6 +1389,77 @@ fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> Result<C>
     }
 
     Ok(result)
+}
+
+// Struct to hold the Newton interpolation state
+struct NewtonInterpolation<C>
+    where
+        C: Curve<Scalar = Fr>,
+{
+    x_points: Vec<C::Scalar>,
+    table: Vec<Vec<C>>,
+    value_at_zero: C,
+    x_term: C::Scalar,
+    coeff_term: C,
+}
+
+impl<C> NewtonInterpolation<C>
+    where
+        C: Curve<Scalar = Fr>,
+{
+    fn new() -> Self {
+        Self {
+            x_points: Vec::new(),
+            table: vec![vec![],vec![]],
+            value_at_zero: C::identity(),
+            x_term: C::Scalar::one(),
+            coeff_term: C::identity(),
+        }
+    }
+
+    fn add_point<T>(&mut self, x: T, y: C) -> std::result::Result<(), Error>
+        where
+            T: Into<Fr>,
+    {
+        let mut x_fr: Fr = x.into();
+        let one_fr = C::Scalar::one();
+        x_fr.add_assign(&one_fr);
+        self.x_points.push(x_fr);
+        let n = self.x_points.len();
+
+        if self.x_points.len() == 1 {
+            self.table[0] = vec![y];
+            self.coeff_term = y;
+            self.value_at_zero = y;
+        } else {
+            self.table[1] = vec![C::identity(); n];
+            self.table[1][0] = y;
+
+            for j in 1..n {
+                let numerator = self.table[1][j-1] - self.table[0][j-1];
+                let denominator = x_fr.sub(&self.x_points[n-j-1]);
+                let denom_inv = denominator.invert();
+                if denom_inv.is_none().into() {
+                    return Err(Error::DuplicateEntry);
+                }
+                self.table[1][j] = numerator.mul(denom_inv.unwrap());
+            }
+            self.coeff_term = self.table[1][n-1];
+            self.table[0] = self.table[1].clone();
+            self.update_value_at_zero();
+        }
+        Ok(())
+    }
+
+    fn update_value_at_zero(&mut self) {
+        let i = self.x_points.len()-1;
+        self.x_term.mul_assign(-self.x_points[i-1]);
+        self.value_at_zero.add_assign(self.coeff_term * self.x_term);
+    }
+
+    fn value_at_zero(&self) -> C {
+        self.value_at_zero
+    }
 }
 
 fn into_fr_plus_1<I: IntoFr>(x: I) -> Fr {
