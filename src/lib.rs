@@ -63,7 +63,7 @@ pub const DST: &[u8; 43] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
 pub struct PublicKeyG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
-pub struct PublicKeyG2(#[serde(with = "serde_impl::affine")] G2Affine);
+pub struct PublicKeyG2(#[serde(with = "serde_impl::affine")] pub G2Affine);
 
 impl Hash for PublicKeyG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -630,8 +630,13 @@ impl SecretKey {
     }
 
     /// Returns the matching public key.
-    pub fn public_key(&self) -> PublicKeyG1 {
+    pub fn public_key_g1(&self) -> PublicKeyG1 {
         PublicKeyG1((G1Affine::generator() * self.0).to_affine())
+    }
+
+    /// Returns the matching public key.
+    pub fn public_key_g2(&self) -> PublicKeyG2 {
+        PublicKeyG2((G2Affine::generator() * self.0).to_affine())
     }
 
     /// Signs the given element of `G2`.
@@ -737,7 +742,7 @@ impl SecretKeyShare {
 
     /// Returns the matching public key share.
     pub fn public_key_share(&self) -> PublicKeyShareG1 {
-        PublicKeyShareG1(self.0.public_key())
+        PublicKeyShareG1(self.0.public_key_g1())
     }
 
     /// Signs the given message.
@@ -1507,7 +1512,7 @@ mod tests {
     fn test_simple_sig() -> Result<()> {
         let sk0 = SecretKey::random();
         let sk1 = SecretKey::random();
-        let pk0 = sk0.public_key();
+        let pk0 = sk0.public_key_g1();
         let msg0 = b"Real news";
         let msg1 = b"Fake news";
         assert!(pk0.verify(&sk0.sign_to_g2(msg0), msg0));
@@ -1577,7 +1582,7 @@ mod tests {
     fn test_simple_enc() {
         let sk_bob: SecretKey = random();
         let sk_eve: SecretKey = random();
-        let pk_bob = sk_bob.public_key();
+        let pk_bob = sk_bob.public_key_g1();
         let msg = b"Muffins in the canteen today! Don't tell Eve!";
         let ciphertext = pk_bob.encrypt(&msg[..]);
         assert!(ciphertext.verify());
@@ -1686,12 +1691,12 @@ mod tests {
     fn test_from_to_bytes() -> Result<()> {
         let sk: SecretKey = random();
         let sig = sk.sign_to_g2("Please sign here: ______");
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         let pk2 = PublicKeyG1::from_bytes(pk.to_bytes()).expect("invalid pk representation");
         assert_eq!(pk, pk2);
         let sig2 = SignatureG2::from_bytes(sig.to_bytes()).expect("invalid sig representation");
         assert_eq!(sig, sig2);
-        let cipher = sk.public_key().encrypt(b"secret msg");
+        let cipher = sk.public_key_g1().encrypt(b"secret msg");
         let cipher2 =
             Ciphertext::from_bytes(&cipher.to_bytes()).expect("invalid cipher representation");
         assert_eq!(cipher, cipher2);
@@ -1718,7 +1723,7 @@ mod tests {
     fn test_serde() -> Result<()> {
         let sk = SecretKey::random();
         let sig = sk.sign_to_g2("Please sign here: ______");
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         let ser_pk = bincode::serialize(&pk).expect("serialize public key");
         let deser_pk: PublicKeyG1 = bincode::deserialize(&ser_pk).expect("deserialize public key");
         assert_eq!(ser_pk.len(), PK_SIZE);
@@ -1779,7 +1784,7 @@ mod tests {
             101, 161,
         ];
         let sk = SecretKey::from_bytes(skbytes)?;
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         // secret key gives same public key
         assert_eq!(pkbytes, pk.to_bytes());
         // signature matches test vector
@@ -1814,7 +1819,7 @@ mod tests {
         let mut sk_bytes = [0u8; SK_SIZE];
         sk_bytes[..SK_SIZE].clone_from_slice(&sk_vec[..SK_SIZE]);
         let sk = SecretKey::from_bytes(sk_bytes).expect("invalid sk bytes");
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         let pk_bytes = pk.to_bytes();
         let pk_to_hex = &format!("{}", HexFmt(&pk_bytes));
         assert_eq!(pk_to_hex, pk_hex);
@@ -2084,11 +2089,11 @@ mod tests {
     #[test]
     fn test_derive_child_public_key() {
         let sk = SecretKey::random();
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         // the derived keypair is a match
         let child_sk = sk.derive_child(&[0]);
         let child_pk = pk.derive_child(&[0]);
-        assert_eq!(child_pk, child_sk.public_key());
+        assert_eq!(child_pk, child_sk.public_key_g1());
     }
 
     #[test]
@@ -2198,7 +2203,7 @@ mod tests {
             let mut sk_bytes = [0u8; SK_SIZE];
             sk_bytes[..SK_SIZE].clone_from_slice(&sk_vec[..SK_SIZE]);
             let sk = SecretKey::from_bytes(sk_bytes).expect("invalid secret key bytes");
-            let pk = sk.public_key();
+            let pk = sk.public_key_g1();
             let pk_hex = &format!("{}", HexFmt(&pk.to_bytes()));
             assert_eq!(pk_hex, vector[1]);
             // test derivation for all the indexes
@@ -2216,7 +2221,7 @@ mod tests {
                 let pk_child_hex = &format!("{}", HexFmt(&pk_child.to_bytes()));
                 assert_eq!(pk_child_hex, vector[v + 2]);
                 // confirm these keys are a pair
-                assert_eq!(sk_child.public_key(), pk_child);
+                assert_eq!(sk_child.public_key_g1(), pk_child);
             }
         }
 
@@ -2317,7 +2322,7 @@ mod tests {
         assert_eq!(pks_share0_child, pks_child_share0);
         // derived master public key is a pair for derived master secret key
         let sks_child = sks.derive_child(&index);
-        assert_eq!(sks_child.secret_key().public_key(), pks_child.public_key());
+        assert_eq!(sks_child.secret_key().public_key_g1(), pks_child.public_key());
     }
 
     #[test]
@@ -2369,7 +2374,7 @@ mod tests {
     #[test]
     fn test_zero_pubkey_attack() {
         let sk = SecretKey::random();
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
 
         // Make sure the public key is not zero
         assert!(!pk.is_zero());

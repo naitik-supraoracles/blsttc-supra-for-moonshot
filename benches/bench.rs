@@ -334,7 +334,7 @@ mod public_key_set_benches {
                 |b, threshold| {
                     let sk_set = SecretKeySet::random(*threshold, &mut rng);
                     let sk = sk_set.secret_key();
-                    let pk = sk.public_key();
+                    let pk = sk.public_key_g1();
                     let ct = pk.encrypt(msg);
                     let pk_set = sk_set.public_keys();
                     let decryption_shares: BTreeMap<_, _> = (0..=*threshold)
@@ -415,7 +415,7 @@ mod public_key_benches {
         group.bench_function("verify", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
                 let sig = sk.sign_to_g2(msg);
@@ -432,7 +432,7 @@ mod public_key_benches {
         group.bench_function("verify_g2", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
                 let hash = hash_g2(msg);
@@ -450,7 +450,7 @@ mod public_key_benches {
         group.bench_function("derive_child", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut index = [0u8; 32];
                 rng.fill_bytes(&mut index);
                 (pk, index)
@@ -466,7 +466,7 @@ mod public_key_benches {
         group.bench_function("encrypt", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
                 (pk, msg)
@@ -542,7 +542,7 @@ mod secret_key_benches {
         group.bench_function("decrypt", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
                 let ct = pk.encrypt(msg);
@@ -573,7 +573,7 @@ mod ciphertext_benches {
         group.bench_function("verify", |b| {
             let rand_factors = || {
                 let sk = SecretKey::random();
-                let pk = sk.public_key();
+                let pk = sk.public_key_g1();
                 let mut msg = [0u8; 1000];
                 rng.fill_bytes(&mut msg);
                 pk.encrypt(msg)

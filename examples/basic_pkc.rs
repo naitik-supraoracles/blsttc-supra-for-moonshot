@@ -17,7 +17,7 @@ struct KeyPair {
 impl KeyPair {
     fn random() -> Self {
         let sk = SecretKey::random();
-        let pk = sk.public_key();
+        let pk = sk.public_key_g1();
         KeyPair { sk, pk }
     }
 

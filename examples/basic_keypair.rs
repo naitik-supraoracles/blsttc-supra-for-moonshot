@@ -6,7 +6,7 @@ use blsttc::SecretKey;
 /// Could be extended to demonstrate the use of shares.
 fn main() {
     let sk = SecretKey::random();
-    let pk = sk.public_key();
+    let pk = sk.public_key_g1();
     println!("public key: {}", pk.to_hex());
     println!("secret key: {}", sk.to_hex());
 }
