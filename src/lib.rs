@@ -310,7 +310,7 @@ impl PublicKeyG2 {
 pub struct PublicKeyShareG1(pub PublicKeyG1);
 
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
-pub struct PublicKeyShareG2(PublicKeyG2);
+pub struct PublicKeyShareG2(pub PublicKeyG2);
 
 impl fmt::Debug for PublicKeyShareG1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
