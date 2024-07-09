@@ -1126,6 +1126,22 @@ impl PublicKeySetG2 {
         ))
     }
 
+    pub fn combine_g1_signatures_parallelized<T, I, S: Borrow<SignatureShareG1>>(
+        &self,
+        shares: I,
+    ) -> Result<SignatureG1>
+        where
+            I: IntoIterator<Item = (T, S)>,
+            T: IntoFr,
+    {
+        let samples = shares
+            .into_iter()
+            .map(|(i, share)| (i, G1Projective::from((share.borrow().0).0)));
+        Ok(SignatureG1(
+            interpolate_parallelized(self.commit.degree(), samples)?.to_affine(),
+        ))
+    }
+
     /// Serializes to big endian bytes
     pub fn to_bytes(&self) -> Vec<u8> {
         self.commit.to_bytes()
