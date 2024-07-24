@@ -98,16 +98,16 @@ impl SerializeSecret for crate::SecretKey {
     }
 }
 
-impl<'de> Deserialize<'de> for crate::SecretKeyShare {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(crate::SecretKeyShare(Deserialize::deserialize(
-            deserializer,
-        )?))
-    }
-}
+// impl<'de> Deserialize<'de> for crate::SecretKeyShare {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         Ok(crate::SecretKeyShare(Deserialize::deserialize(
+//             deserializer,
+//         )?))
+//     }
+// }
 
 impl SerializeSecret for crate::SecretKeyShare {
     fn serialize_secret<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

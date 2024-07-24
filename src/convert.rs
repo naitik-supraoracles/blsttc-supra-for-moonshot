@@ -3,7 +3,7 @@
 use blst::blst_scalar;
 
 use crate::{
-    error::{Error, Result},
+    error::{Error, CrResult},
     Fr, G1Affine, G2Affine, DST, PK_SIZE, SIG_SIZE, SK_SIZE,
 };
 
@@ -25,7 +25,7 @@ pub(crate) fn derivation_index_into_fr(index: &[u8]) -> Fr {
 /// * bls signature keygen based on hkdf
 /// BLS Signature spec has strong recommendations about IKM which don't apply when deriving indexes.
 /// Hash to field is also slightly faster than HKDF.
-fn hash_to_field<T: AsRef<[u8]>>(msg: T) -> Result<Fr> {
+fn hash_to_field<T: AsRef<[u8]>>(msg: T) -> CrResult<Fr> {
     // hash_to may return None if the result is Fr::zero
     let scalar = blst_scalar::hash_to(msg.as_ref(), DST).ok_or(Error::HashToFieldIsZero)?;
     // converting blst::blst_scalar to blstrs::Scalar may return an error if
@@ -34,7 +34,7 @@ fn hash_to_field<T: AsRef<[u8]>>(msg: T) -> Result<Fr> {
     fr.map_err(|_| Error::HashToFieldIsZero)
 }
 
-pub(crate) fn fr_from_bytes(bytes: [u8; SK_SIZE]) -> Result<Fr> {
+pub(crate) fn fr_from_bytes(bytes: [u8; SK_SIZE]) -> CrResult<Fr> {
     // TODO IC remove unwrap here? I'm not sure if it's possible with CtOption
     let fr = Fr::from_bytes_be(&bytes);
     if fr.is_none().into() {
@@ -43,7 +43,7 @@ pub(crate) fn fr_from_bytes(bytes: [u8; SK_SIZE]) -> Result<Fr> {
     Ok(fr.unwrap())
 }
 
-pub(crate) fn g1_from_bytes(bytes: [u8; PK_SIZE]) -> Result<G1Affine> {
+pub(crate) fn g1_from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<G1Affine> {
     // TODO IC remove unwrap here? I'm not sure if it's possible with CtOption
     let g1 = G1Affine::from_compressed(&bytes);
     if g1.is_none().into() {
@@ -52,7 +52,7 @@ pub(crate) fn g1_from_bytes(bytes: [u8; PK_SIZE]) -> Result<G1Affine> {
     Ok(g1.unwrap())
 }
 
-pub(crate) fn g2_from_bytes(bytes: [u8; SIG_SIZE]) -> Result<G2Affine> {
+pub(crate) fn g2_from_bytes(bytes: [u8; SIG_SIZE]) -> CrResult<G2Affine> {
     // TODO IC remove unwrap here? I'm not sure if it's possible with CtOption
     let g2 = G2Affine::from_compressed(&bytes);
     if g2.is_none().into() {

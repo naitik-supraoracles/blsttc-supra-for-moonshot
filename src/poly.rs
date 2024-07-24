@@ -32,7 +32,7 @@ use zeroize::Zeroize;
 
 use crate::cmp_pairing::cmp_affine;
 use crate::convert::{fr_from_bytes, g1_from_bytes, g2_from_bytes};
-use crate::error::{Error, Result};
+use crate::error::{Error, CrResult};
 use crate::into_fr::IntoFr;
 use crate::secret::clear_fr;
 use crate::{Field, Fr, G1Affine, G1Projective, PK_SIZE, SIG_SIZE, SK_SIZE};
@@ -289,7 +289,7 @@ impl Poly {
     /// Creates a random polynomial. This constructor is identical to the `Poly::random()`
     /// constructor in every way except that this constructor will return an `Err` where
     /// `try_random` would return an error.
-    pub fn try_random<R: Rng>(degree: usize, rng: &mut R) -> Result<Self> {
+    pub fn try_random<R: Rng>(degree: usize, rng: &mut R) -> CrResult<Self> {
         if degree == usize::max_value() {
             return Err(Error::DegreeTooHigh);
         }
@@ -340,7 +340,7 @@ impl Poly {
 
     /// Returns the unique polynomial `f` of degree `samples.len() - 1` with the given values
     /// `(x, f(x))`.
-    pub fn interpolate<T, U, I>(samples_repr: I) -> Result<Self>
+    pub fn interpolate<T, U, I>(samples_repr: I) -> CrResult<Self>
     where
         I: IntoIterator<Item = (T, U)>,
         T: IntoFr,
@@ -402,7 +402,7 @@ impl Poly {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let mut c: Vec<Fr> = vec![];
         let coeff_size = bytes.len() / SK_SIZE;
         for i in 0..coeff_size {
@@ -430,7 +430,7 @@ impl Poly {
 
     /// Returns the unique polynomial `f` of degree `samples.len() - 1` with the given values
     /// `(x, f(x))`.
-    fn compute_interpolation(samples: &[(Fr, Fr)]) -> Result<Self> {
+    fn compute_interpolation(samples: &[(Fr, Fr)]) -> CrResult<Self> {
         if samples.is_empty() {
             return Ok(Poly::zero());
         }
@@ -648,7 +648,7 @@ impl CommitmentG1 {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let mut c: Vec<G1Affine> = vec![];
         let coeff_size = bytes.len() / PK_SIZE;
         for i in 0..coeff_size {
@@ -712,7 +712,7 @@ impl CommitmentG2 {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let mut c: Vec<G2Affine> = vec![];
         let coeff_size = bytes.len() / SIG_SIZE;
         for i in 0..coeff_size {
@@ -790,7 +790,7 @@ impl BivarPoly {
     }
 
     /// Creates a random polynomial.
-    pub fn try_random<R: Rng>(degree: usize, rng: &mut R) -> Result<Self> {
+    pub fn try_random<R: Rng>(degree: usize, rng: &mut R) -> CrResult<Self> {
         let len = coeff_pos(degree, degree)
             .and_then(|l| l.checked_add(1))
             .ok_or(Error::DegreeTooHigh)?;
@@ -884,7 +884,7 @@ impl BivarPoly {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let mut c: Vec<Fr> = vec![];
         let coeff_size = bytes.len() / SK_SIZE;
         for coeff_index in 0..coeff_size {
@@ -1006,7 +1006,7 @@ impl BivarCommitment {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let mut c: Vec<G1Affine> = vec![];
         let coeff_size = bytes.len() / PK_SIZE;
         for i in 0..coeff_size {
@@ -1074,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn poly() -> Result<()> {
+    fn poly() -> CrResult<()> {
         // The polynomial 5 X³ + X - 2.
         let x_pow_3 = Poly::monomial(3);
         let x_pow_1 = Poly::monomial(1);
@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn distributed_key_generation() -> Result<()> {
+    fn distributed_key_generation() -> CrResult<()> {
         let mut rng = rand::thread_rng();
         let dealer_num = 3;
         let node_num = 5;

@@ -30,7 +30,7 @@ pub enum Error {
 }
 
 /// A crypto result.
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type CrResult<T> = ::std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {

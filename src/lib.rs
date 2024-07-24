@@ -7,7 +7,9 @@
 // re-export crates used in our public API.
 pub use blstrs;
 pub use group;
+use nizk_dleq::{prove_gen, verify_proof, DLEqInstance, DLEqWitness, ZkProofDLEq};
 pub use rand;
+use rand::thread_rng;
 pub use serde; // todo: add serde feature flag later.
 
 mod cmp_pairing;
@@ -33,12 +35,13 @@ use pairing::Engine;
 use rand::distributions::{Distribution, Standard};
 use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize,de, ser};
 use zeroize::Zeroize;
+
 
 use crate::cmp_pairing::cmp_affine;
 use crate::convert::{derivation_index_into_fr, fr_from_bytes, g1_from_bytes, g2_from_bytes};
-pub use crate::error::{Error, Result};
+pub use crate::error::{Error, CrResult};
 pub use crate::into_fr::IntoFr;
 use crate::poly::{CommitmentG1, CommitmentG2, Poly};
 use crate::secret::clear_fr;
@@ -64,6 +67,19 @@ pub struct PublicKeyG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
 pub struct PublicKeyG2(#[serde(with = "serde_impl::affine")] pub G2Affine);
+
+impl Default for PublicKeyG1{
+    fn default() -> PublicKeyG1 {
+        Self(G1Affine::default())
+    }
+}
+
+
+impl Default for PublicKeyG2 {
+    fn default() -> PublicKeyG2 {
+        Self(G2Affine::default())
+    }
+}
 
 impl Hash for PublicKeyG1 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -240,7 +256,7 @@ impl PublicKeyG1 {
     }
 
     /// Returns the key with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         let g1 = g1_from_bytes(bytes)?;
         Ok(PublicKeyG1(g1))
     }
@@ -251,7 +267,7 @@ impl PublicKeyG1 {
     }
 
     /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
-    pub fn from_hex(hex: &str) -> Result<Self> {
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
         let pk_bytes = hex::decode(hex)?;
         let pk_bytes: [u8; PK_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
         Self::from_bytes(pk_bytes)
@@ -282,7 +298,7 @@ impl PublicKeyG2 {
     }
 
     /// Returns the key with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> CrResult<Self> {
         let g2 = g2_from_bytes(bytes)?;
         Ok(PublicKeyG2(g2))
     }
@@ -293,7 +309,7 @@ impl PublicKeyG2 {
     }
 
     /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
-    pub fn from_hex(hex: &str) -> Result<Self> {
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
         let pk_bytes = hex::decode(hex)?;
         let pk_bytes: [u8; SIG_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
         Self::from_bytes(pk_bytes)
@@ -306,10 +322,10 @@ impl PublicKeyG2 {
 }
 
 /// A public key share.
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct PublicKeyShareG1(pub PublicKeyG1);
 
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub struct PublicKeyShareG2(pub PublicKeyG2);
 
 impl fmt::Debug for PublicKeyShareG1 {
@@ -323,6 +339,60 @@ impl fmt::Debug for PublicKeyShareG2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uncomp = self.0 .0.to_uncompressed();
         write!(f, "PublicKeyShareG2({:0.10})", HexFmt(uncomp))
+    }
+}
+
+impl Serialize for PublicKeyShareG1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ser::Serializer,
+    {
+        serializer.serialize_str(&self.encode_base64())
+    }
+}
+
+impl Serialize for PublicKeyShareG2 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ser::Serializer,
+    {
+        serializer.serialize_str(&self.encode_base64())
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKeyShareG1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let value = Self::decode_base64(&s).map_err(|e| de::Error::custom(e.to_string()))?;
+        Ok(value)
+    }
+}
+
+
+impl<'de> Deserialize<'de> for PublicKeyShareG2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let value = Self::decode_base64(&s).map_err(|e| de::Error::custom(e.to_string()))?;
+        Ok(value)
+    }
+}
+
+impl Default for PublicKeyShareG1{
+    fn default() -> PublicKeyShareG1 {
+        Self(PublicKeyG1(G1Affine::default()))
+    }
+}
+
+
+impl Default for PublicKeyShareG2 {
+    fn default() -> PublicKeyShareG2 {
+        Self(PublicKeyG2(G2Affine::default()))
     }
 }
 
@@ -350,13 +420,37 @@ impl PublicKeyShareG1 {
     }
 
     /// Returns the key share with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         Ok(PublicKeyShareG1(PublicKeyG1::from_bytes(bytes)?))
     }
 
     /// Returns a byte string representation of the public key share.
     pub fn to_bytes(self) -> [u8; PK_SIZE] {
         self.0.to_bytes()
+    }
+
+     /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
+        let pk_bytes = hex::decode(hex)?;
+        let pk_bytes: [u8; PK_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(pk_bytes)
+    }
+
+    /// Serialize this `PublicKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
+
+    }
+
+    pub fn encode_base64(&self) -> String {
+        base64::encode(&self.to_bytes())
+    }
+        
+    pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
+        let bytes = base64::decode(s)?;
+        let array: [u8;48] = bytes[..48].try_into().unwrap();
+        let pubkey = PublicKeyShareG1::from_bytes(array).unwrap();
+        Ok(pubkey)
     }
 }
 
@@ -368,7 +462,7 @@ impl PublicKeyShareG2 {
     }
 
     /// Returns the key share with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> CrResult<Self> {
         Ok(PublicKeyShareG2(PublicKeyG2::from_bytes(bytes)?))
     }
 
@@ -377,15 +471,48 @@ impl PublicKeyShareG2 {
         self.0.to_bytes()
     }
 
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
+        let pk_bytes = hex::decode(hex)?;
+        let pk_bytes: [u8; SIG_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(pk_bytes)
+    }
+
+    /// Serialize this `PublicKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
+    }
+
+    pub fn encode_base64(&self) -> String {
+        base64::encode(&self.to_bytes())
+    }
+        
+    pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
+        let bytes = base64::decode(s)?;
+        let array: [u8;96] = bytes[..96].try_into().unwrap();
+        let pubkey = PublicKeyShareG2::from_bytes(array).unwrap();
+        Ok(pubkey)
+    }
 }
 
 /// A signature.
 // Note: Random signatures can be generated for testing.
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Copy)]
 pub struct SignatureG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Copy)]
 pub struct SignatureG2(#[serde(with = "serde_impl::affine")] pub G2Affine);
+
+impl Default for SignatureG1 {
+    fn default() -> SignatureG1 {
+        Self(G1Affine::default())
+    }
+}
+
+impl Default for SignatureG2 {
+    fn default() -> SignatureG2 {
+        Self(G2Affine::default())
+    }
+}
 
 impl PartialOrd for SignatureG1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -452,7 +579,7 @@ impl Hash for SignatureG2 {
 impl SignatureG1 {
 
     /// Returns the signature with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         let g1 = g1_from_bytes(bytes)?;
         Ok(SignatureG1(g1))
     }
@@ -472,7 +599,7 @@ impl SignatureG2 {
     }
 
     /// Returns the signature with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> CrResult<Self> {
         let g2 = g2_from_bytes(bytes)?;
         Ok(SignatureG2(g2))
     }
@@ -485,11 +612,23 @@ impl SignatureG2 {
 
 /// A signature share.
 // Note: Random signature shares can be generated for testing.
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Ord, PartialOrd, Copy)]
 pub struct SignatureShareG1(pub SignatureG1);
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Copy)]
 pub struct SignatureShareG2(pub SignatureG2);
+
+impl Default for SignatureShareG1 {
+    fn default() -> SignatureShareG1 {
+        Self(SignatureG1(G1Affine::default()))
+    }
+}
+
+impl Default for SignatureShareG2 {
+    fn default() -> SignatureShareG2 {
+        Self(SignatureG2(G2Affine::default()))
+    }
+}
 
 impl Distribution<SignatureShareG1> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureShareG1 {
@@ -519,7 +658,7 @@ impl fmt::Debug for SignatureShareG2 {
 
 impl SignatureShareG1 {
     /// Returns the signature share with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         Ok(SignatureShareG1(SignatureG1::from_bytes(bytes)?))
     }
 
@@ -527,11 +666,63 @@ impl SignatureShareG1 {
     pub fn to_bytes(&self) -> [u8; PK_SIZE] {
         self.0.to_bytes()
     }
+
+    pub fn new_with_nizk(digest: &[u8;32], secret: &SecretKeyShare, pubkey: &PublicKeyShareG1) -> (Self, nizk_dleq::ZkProofDLEq) {
+        let sig = secret.sign_g1(&digest);
+        // let Sign = BlsSign(sig);
+
+        let mut rng = thread_rng();
+        let r: Fr = Fr::random(&mut rng);
+        let g = G1Affine::generator();
+        let h = hash_g1(digest);
+        let g_x = pubkey.0 .0;
+        let h_x = sig.0 .0;
+        let instance = DLEqInstance { g, h, g_x, h_x };
+        let witness = DLEqWitness {
+            scalar_x: secret.0 .0,
+            scalar_r: r,
+        };
+        let nizk = prove_gen(&instance, &witness);
+
+        (sig, nizk)
+    }
+
+    pub fn verify_with_nizk(
+        &self,
+        digest: &[u8;32],
+        public_key: &PublicKeyShareG1,
+        nizk: &ZkProofDLEq,
+    ) -> CrResult<()> {
+        let g = G1Affine::generator();
+        let g_x = public_key.0 .0;
+        let h_x = self.0 .0;
+        let h = hash_g1(digest);
+        let instance = DLEqInstance { g, h, g_x, h_x };
+        let res = verify_proof(&instance, &nizk) == Ok(());
+        if res {
+            Ok(())
+        } else {
+            Err(Error::InvalidBytes)
+        }
+    }
+
+    pub fn verify_batch(
+        digest: &[u8;32],
+        pubkey: &PublicKeyShareG2,
+        sign: &SignatureShareG1,
+    ) -> CrResult<()> {
+        let res = pubkey.verify(&sign, &digest);
+        if res {
+            Ok(())
+        } else {
+            Err(Error::InvalidBytes)
+        }
+    }
 }
 
 impl SignatureShareG2 {
     /// Returns the signature share with the given representation, if valid.
-    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SIG_SIZE]) -> CrResult<Self> {
         Ok(SignatureShareG2(SignatureG2::from_bytes(bytes)?))
     }
 
@@ -549,7 +740,7 @@ impl SignatureShareG2 {
 /// `SecretKey` implements `Deserialize` but not `Serialize` to avoid accidental
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone,Serialize)]
 pub struct SecretKey(pub Fr);
 
 impl Zeroize for SecretKey {
@@ -558,11 +749,6 @@ impl Zeroize for SecretKey {
     }
 }
 
-impl Drop for SecretKey {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
 
 /// Creates a `SecretKey` containing the zero prime field element.
 impl Default for SecretKey {
@@ -663,13 +849,13 @@ impl SecretKey {
     }
 
     /// Deserialize from big endian bytes
-    pub fn from_bytes(bytes: [u8; SK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SK_SIZE]) -> CrResult<Self> {
         let mut fr = fr_from_bytes(bytes)?;
         Ok(SecretKey::from_mut(&mut fr))
     }
 
     /// Deserialize a hex-encoded representation of a `SecretKey` to a `SecretKey` instance.
-    pub fn from_hex(hex: &str) -> Result<Self> {
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
         let sk_bytes = hex::decode(hex)?;
         let sk_bytes: [u8; SK_SIZE] = sk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
         Self::from_bytes(sk_bytes)
@@ -725,6 +911,26 @@ impl Distribution<SecretKeyShare> for Standard {
 impl fmt::Debug for SecretKeyShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("SecretKeyShare").field(&DebugDots).finish()
+    }
+}
+
+impl Serialize for SecretKeyShare {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ser::Serializer,
+    {
+        serializer.serialize_str(&self.encode_base64())
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretKeyShare {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let value = Self::decode_base64(&s).map_err(|e| de::Error::custom(e.to_string()))?;
+        Ok(value)
     }
 }
 
@@ -785,8 +991,31 @@ impl SecretKeyShare {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: [u8; SK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; SK_SIZE]) -> CrResult<Self> {
         Ok(SecretKeyShare(SecretKey::from_bytes(bytes)?))
+    }
+
+    pub fn from_hex(hex: &str) -> CrResult<Self> {
+        let pk_bytes = hex::decode(hex)?;
+        let pk_bytes: [u8; SK_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
+        Self::from_bytes(pk_bytes)
+    }
+
+    /// Serialize this `PublicKey` instance to a hex-encoded `String`.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.to_bytes())
+
+    }
+
+    pub fn encode_base64(&self) -> String {
+        base64::encode(&self.to_bytes())
+    }
+        
+    pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
+        let bytes = base64::decode(s)?;
+        let array: [u8;32] = bytes[..32].try_into().unwrap();
+        let keyshare = SecretKeyShare::from_bytes(array).unwrap();
+        Ok(keyshare)
     }
 }
 
@@ -841,7 +1070,7 @@ impl Ciphertext {
     }
 
     /// Returns the Ciphertext with the given representation, if valid.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> CrResult<Self> {
         if bytes.len() < PK_SIZE + SIG_SIZE + 1 {
             return Err(Error::InvalidBytes);
         }
@@ -884,7 +1113,7 @@ impl fmt::Debug for DecryptionShare {
 
 impl DecryptionShare {
     /// Deserializes the share from big endian bytes
-    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> Result<Self> {
+    pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         let g1 = g1_from_bytes(bytes)?;
         Ok(DecryptionShare(g1))
     }
@@ -1006,7 +1235,7 @@ impl PublicKeySetG1 {
     pub fn combine_g2_signatures<T, I, S: Borrow<SignatureShareG2>>(
         &self,
         shares: I,
-    ) -> Result<SignatureG2>
+    ) -> CrResult<SignatureG2>
     where
         I: IntoIterator<Item = (T, S)>,
         T: IntoFr,
@@ -1022,7 +1251,7 @@ impl PublicKeySetG1 {
     pub fn combine_g1_signatures<T, I, S: Borrow<SignatureShareG1>>(
         &self,
         shares: I,
-    ) -> Result<SignatureG1>
+    ) -> CrResult<SignatureG1>
         where
             I: IntoIterator<Item = (T, S)>,
             T: IntoFr,
@@ -1038,7 +1267,7 @@ impl PublicKeySetG1 {
     pub fn combine_g1_signatures_parallelized<T, I, S: Borrow<SignatureShareG1>>(
         &self,
         shares: I,
-    ) -> Result<SignatureG1>
+    ) -> CrResult<SignatureG1>
         where
             I: IntoIterator<Item = (T, S)>,
             T: IntoFr,
@@ -1052,7 +1281,7 @@ impl PublicKeySetG1 {
     }
 
     /// Combines the shares to decrypt the ciphertext.
-    pub fn decrypt<'a, T, I>(&self, shares: I, ct: &Ciphertext) -> Result<Vec<u8>>
+    pub fn decrypt<'a, T, I>(&self, shares: I, ct: &Ciphertext) -> CrResult<Vec<u8>>
     where
         I: IntoIterator<Item = (T, &'a DecryptionShare)>,
         T: IntoFr,
@@ -1086,7 +1315,7 @@ impl PublicKeySetG1 {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let commit = CommitmentG1::from_bytes(bytes)?;
         Ok(PublicKeySetG1 { commit })
     }
@@ -1113,7 +1342,7 @@ impl PublicKeySetG2 {
     pub fn combine_signatures<T, I, S: Borrow<SignatureShareG1>>(
         &self,
         shares: I,
-    ) -> Result<SignatureG1>
+    ) -> CrResult<SignatureG1>
         where
             I: IntoIterator<Item = (T, S)>,
             T: IntoFr,
@@ -1129,7 +1358,7 @@ impl PublicKeySetG2 {
     pub fn combine_g1_signatures_parallelized<T, I, S: Borrow<SignatureShareG1>>(
         &self,
         shares: I,
-    ) -> Result<SignatureG1>
+    ) -> CrResult<SignatureG1>
         where
             I: IntoIterator<Item = (T, S)>,
             T: IntoFr,
@@ -1148,7 +1377,7 @@ impl PublicKeySetG2 {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let commit = CommitmentG2::from_bytes(bytes)?;
         Ok(PublicKeySetG2 { commit })
     }
@@ -1184,7 +1413,7 @@ impl SecretKeySet {
     /// Creates a set of secret key shares, where any `threshold + 1` of them can collaboratively
     /// sign and decrypt. This constructor is identical to the `SecretKeySet::random()` in every
     /// way except that this constructor returns an `Err` where the `random` would panic.
-    pub fn try_random<R: Rng>(threshold: usize, rng: &mut R) -> Result<Self> {
+    pub fn try_random<R: Rng>(threshold: usize, rng: &mut R) -> CrResult<Self> {
         Poly::try_random(threshold, rng).map(SecretKeySet::from)
     }
 
@@ -1250,7 +1479,7 @@ impl SecretKeySet {
     }
 
     /// Deserializes from big endian bytes
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> CrResult<Self> {
         let poly = Poly::from_bytes(bytes)?;
         Ok(SecretKeySet { poly })
     }
@@ -1288,7 +1517,7 @@ fn xor_with_hash(g1: G1Affine, bytes: &[u8]) -> Vec<u8> {
 
 /// Given a list of `t + 1` samples `(i - 1, f(i) * g)` for a polynomial `f` of degree `t`, and a
 /// group generator `g`, returns `f(0) * g`.
-fn interpolate<C, B, T, I>(t: usize, items: I) -> Result<C>
+fn interpolate<C, B, T, I>(t: usize, items: I) -> CrResult<C>
 where
     C: Curve<Scalar = Fr>,
     I: IntoIterator<Item = (T, B)>,
@@ -1349,7 +1578,7 @@ where
 
 /// Given a list of `t + 1` samples `(i - 1, f(i) * g)` for a polynomial `f` of degree `t`, and a
 /// group generator `g`, returns `f(0) * g`.
-fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> Result<C>
+fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> CrResult<C>
     where
         C: Curve<Scalar = Fr>,
         I: IntoIterator<Item = (T, B)>,
@@ -1525,7 +1754,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_sig() -> Result<()> {
+    fn test_simple_sig() -> CrResult<()> {
         let sk0 = SecretKey::random();
         let sk1 = SecretKey::random();
         let pk0 = sk0.public_key_g1();
@@ -1538,7 +1767,7 @@ mod tests {
     }
 
     #[test]
-    fn test_threshold_sig() -> Result<()> {
+    fn test_threshold_sig() -> CrResult<()> {
         let mut rng = rand::thread_rng();
         let sk_set = SecretKeySet::random(3, &mut rng);
         let pk_set = sk_set.public_keys();
@@ -1704,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_to_bytes() -> Result<()> {
+    fn test_from_to_bytes() -> CrResult<()> {
         let sk: SecretKey = random();
         let sig = sk.sign_to_g2("Please sign here: ______");
         let pk = sk.public_key_g1();
@@ -1720,7 +1949,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_to_hex() -> Result<()> {
+    fn test_from_to_hex() -> CrResult<()> {
         let sk_hex = "4a353be3dac091a0a7e640620372f5e1e2e4401717c1e79cac6ffba8f6905604";
         let sk = SecretKey::from_hex(sk_hex)?;
         let sk2_hex = sk.to_hex();
@@ -1736,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serde() -> Result<()> {
+    fn test_serde() -> CrResult<()> {
         let sk = SecretKey::random();
         let sig = sk.sign_to_g2("Please sign here: ______");
         let pk = sk.public_key_g1();
@@ -1778,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interoperability() -> Result<()> {
+    fn test_interoperability() -> CrResult<()> {
         // This test only pases if fn sign and fn verify are using the BLST code
         // https://github.com/Chia-Network/bls-signatures/blob/ee71adc0efeae3a7487cf0662b7bee3825752a29/src/test.cpp#L249-L260
         let skbytes = [
@@ -1827,7 +2056,7 @@ mod tests {
     }
 
     #[test]
-    fn vectors_sk_to_from_bytes() -> Result<()> {
+    fn vectors_sk_to_from_bytes() -> CrResult<()> {
         // from https://github.com/Chia-Network/bls-signatures/blob/ee71adc0efeae3a7487cf0662b7bee3825752a29/src/test.cpp#L249
         let sk_hex = "4a353be3dac091a0a7e640620372f5e1e2e4401717c1e79cac6ffba8f6905604";
         let pk_hex = "85695fcbc06cc4c4c9451f4dce21cbf8de3e5a13bf48f44cdbb18e2038ba7b8bb1632d7911ef1e2e08749bddbf165352";
@@ -1885,7 +2114,7 @@ mod tests {
     }
 
     #[test]
-    fn vectors_public_key_set_to_from_bytes() -> Result<()> {
+    fn vectors_public_key_set_to_from_bytes() -> CrResult<()> {
         let vectors = vec![
             // Plain old Public Key Set
             vec![
@@ -1995,7 +2224,7 @@ mod tests {
     }
 
     #[test]
-    fn vectors_secret_key_set_to_from_bytes() -> Result<()> {
+    fn vectors_secret_key_set_to_from_bytes() -> CrResult<()> {
         let vectors = vec![
             // Plain old Secret Key Set
             // Sourced from Poly::reveal and SecretKey::reveal
@@ -2128,7 +2357,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_child_key_vectors() -> Result<()> {
+    fn test_derive_child_key_vectors() -> CrResult<()> {
         let vectors = vec![
             // Plain old derivation
             vec![

@@ -4,6 +4,7 @@ use ff::Field;
 use group::{Curve, GroupEncoding};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::{Deserialize, Serialize};
 use crate::Fr;
 use crate::util::sha3_256;
 
@@ -11,7 +12,7 @@ const DOMAIN_PROOF_OF_DLEQ_CHALLENGE: &str = "blsttc-zk-proof-of-dleq-challenge"
 
 ///   instance = (g,h,g^x,h^x)
 ///   g and h are different generators of g1
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DLEqInstance {
     pub g: G1Affine,
     pub h: G1Affine,
@@ -27,7 +28,7 @@ pub struct DLEqWitness {
 }
 
 /// Zero-knowledge proof of equality of discrete log.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize,Default)]
 pub struct ZkProofDLEq {
     pub c: Fr,
     pub s: Fr,

@@ -19,6 +19,7 @@ rand_chacha = "0.3.1"
 thiserror = "1.0.22"
 zeroize = "1.5.7"
 rayon = "1.10.0"
+base64 = "0.13.0"
 
   [dependencies.blst]
   version = "0.3.7"
