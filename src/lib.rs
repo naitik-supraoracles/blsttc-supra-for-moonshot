@@ -19,9 +19,9 @@ mod secret;
 mod util;
 
 pub mod error;
+pub mod nizk_dleq;
 pub mod poly;
 pub mod serde_impl;
-pub mod nizk_dleq;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -35,13 +35,12 @@ use pairing::Engine;
 use rand::distributions::{Distribution, Standard};
 use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
-use serde::{Deserialize, Serialize,de, ser};
+use serde::{de, ser, Deserialize, Serialize};
 use zeroize::Zeroize;
-
 
 use crate::cmp_pairing::cmp_affine;
 use crate::convert::{derivation_index_into_fr, fr_from_bytes, g1_from_bytes, g2_from_bytes};
-pub use crate::error::{Error, CrResult};
+pub use crate::error::{CrResult, Error};
 pub use crate::into_fr::IntoFr;
 use crate::poly::{CommitmentG1, CommitmentG2, Poly};
 use crate::secret::clear_fr;
@@ -68,12 +67,11 @@ pub struct PublicKeyG1(#[serde(with = "serde_impl::affine")] pub G1Affine);
 #[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Eq)]
 pub struct PublicKeyG2(#[serde(with = "serde_impl::affine")] pub G2Affine);
 
-impl Default for PublicKeyG1{
+impl Default for PublicKeyG1 {
     fn default() -> PublicKeyG1 {
         Self(G1Affine::default())
     }
 }
-
 
 impl Default for PublicKeyG2 {
     fn default() -> PublicKeyG2 {
@@ -288,8 +286,8 @@ impl PublicKeyG2 {
     /// Returns `true` if the signature matches the element of `G2`.
     pub fn verify_g1<H: Into<G1Affine>>(&self, sig: &SignatureG1, hash: H) -> bool {
         !self.is_zero()
-            && PEngine::pairing(&hash.into(),&self.0)
-            == PEngine::pairing(&sig.0, &G2Affine::generator())
+            && PEngine::pairing(&hash.into(), &self.0)
+                == PEngine::pairing(&sig.0, &G2Affine::generator())
     }
 
     /// Returns `true` if the signature matches the message.
@@ -371,7 +369,6 @@ impl<'de> Deserialize<'de> for PublicKeyShareG1 {
     }
 }
 
-
 impl<'de> Deserialize<'de> for PublicKeyShareG2 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -383,12 +380,11 @@ impl<'de> Deserialize<'de> for PublicKeyShareG2 {
     }
 }
 
-impl Default for PublicKeyShareG1{
+impl Default for PublicKeyShareG1 {
     fn default() -> PublicKeyShareG1 {
         Self(PublicKeyG1(G1Affine::default()))
     }
 }
-
 
 impl Default for PublicKeyShareG2 {
     fn default() -> PublicKeyShareG2 {
@@ -429,7 +425,7 @@ impl PublicKeyShareG1 {
         self.0.to_bytes()
     }
 
-     /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
+    /// Deserialize a hex-encoded representation of a `PublicKey` to a `PublicKey` instance.
     pub fn from_hex(hex: &str) -> CrResult<Self> {
         let pk_bytes = hex::decode(hex)?;
         let pk_bytes: [u8; PK_SIZE] = pk_bytes.try_into().map_err(|_| Error::InvalidBytes)?;
@@ -439,23 +435,21 @@ impl PublicKeyShareG1 {
     /// Serialize this `PublicKey` instance to a hex-encoded `String`.
     pub fn to_hex(&self) -> String {
         hex::encode(self.to_bytes())
-
     }
 
     pub fn encode_base64(&self) -> String {
         base64::encode(&self.to_bytes())
     }
-        
+
     pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
         let bytes = base64::decode(s)?;
-        let array: [u8;48] = bytes[..48].try_into().unwrap();
+        let array: [u8; 48] = bytes[..48].try_into().unwrap();
         let pubkey = PublicKeyShareG1::from_bytes(array).unwrap();
         Ok(pubkey)
     }
 }
 
 impl PublicKeyShareG2 {
-
     /// Returns `true` if the signature matches the message.
     pub fn verify<M: AsRef<[u8]>>(&self, sig: &SignatureShareG1, msg: M) -> bool {
         self.0.verify(&sig.0, msg)
@@ -485,10 +479,10 @@ impl PublicKeyShareG2 {
     pub fn encode_base64(&self) -> String {
         base64::encode(&self.to_bytes())
     }
-        
+
     pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
         let bytes = base64::decode(s)?;
-        let array: [u8;96] = bytes[..96].try_into().unwrap();
+        let array: [u8; 96] = bytes[..96].try_into().unwrap();
         let pubkey = PublicKeyShareG2::from_bytes(array).unwrap();
         Ok(pubkey)
     }
@@ -577,7 +571,6 @@ impl Hash for SignatureG2 {
 }
 
 impl SignatureG1 {
-
     /// Returns the signature with the given representation, if valid.
     pub fn from_bytes(bytes: [u8; PK_SIZE]) -> CrResult<Self> {
         let g1 = g1_from_bytes(bytes)?;
@@ -667,7 +660,15 @@ impl SignatureShareG1 {
         self.0.to_bytes()
     }
 
-    pub fn new_with_nizk(digest: &[u8;32], secret: &SecretKeyShare, pubkey: &PublicKeyShareG1) -> (Self, nizk_dleq::ZkProofDLEq) {
+    pub fn new(digest: &[u8; 32], secret: &SecretKeyShare) -> Self {
+        secret.sign_g1(&digest)
+    }
+
+    pub fn new_with_nizk(
+        digest: &[u8; 32],
+        secret: &SecretKeyShare,
+        pubkey: &PublicKeyShareG1,
+    ) -> (Self, nizk_dleq::ZkProofDLEq) {
         let sig = secret.sign_g1(&digest);
         // let Sign = BlsSign(sig);
 
@@ -689,7 +690,7 @@ impl SignatureShareG1 {
 
     pub fn verify_with_nizk(
         &self,
-        digest: &[u8;32],
+        digest: &[u8; 32],
         public_key: &PublicKeyShareG1,
         nizk: &ZkProofDLEq,
     ) -> CrResult<()> {
@@ -707,7 +708,7 @@ impl SignatureShareG1 {
     }
 
     pub fn verify_batch(
-        digest: &[u8;32],
+        digest: &[u8; 32],
         pubkey: &PublicKeyShareG2,
         sign: &SignatureShareG1,
     ) -> CrResult<()> {
@@ -740,7 +741,7 @@ impl SignatureShareG2 {
 /// `SecretKey` implements `Deserialize` but not `Serialize` to avoid accidental
 /// serialization in insecure contexts. To enable both use the `::serde_impl::SerdeSecret`
 /// wrapper which implements both `Deserialize` and `Serialize`.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone,Serialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Serialize)]
 pub struct SecretKey(pub Fr);
 
 impl Zeroize for SecretKey {
@@ -748,7 +749,6 @@ impl Zeroize for SecretKey {
         clear_fr(&mut self.0)
     }
 }
-
 
 /// Creates a `SecretKey` containing the zero prime field element.
 impl Default for SecretKey {
@@ -1004,16 +1004,15 @@ impl SecretKeyShare {
     /// Serialize this `PublicKey` instance to a hex-encoded `String`.
     pub fn to_hex(&self) -> String {
         hex::encode(self.to_bytes())
-
     }
 
     pub fn encode_base64(&self) -> String {
         base64::encode(&self.to_bytes())
     }
-        
+
     pub fn decode_base64(s: &str) -> Result<Self, base64::DecodeError> {
         let bytes = base64::decode(s)?;
-        let array: [u8;32] = bytes[..32].try_into().unwrap();
+        let array: [u8; 32] = bytes[..32].try_into().unwrap();
         let keyshare = SecretKeyShare::from_bytes(array).unwrap();
         Ok(keyshare)
     }
@@ -1252,9 +1251,9 @@ impl PublicKeySetG1 {
         &self,
         shares: I,
     ) -> CrResult<SignatureG1>
-        where
-            I: IntoIterator<Item = (T, S)>,
-            T: IntoFr,
+    where
+        I: IntoIterator<Item = (T, S)>,
+        T: IntoFr,
     {
         let samples = shares
             .into_iter()
@@ -1268,9 +1267,9 @@ impl PublicKeySetG1 {
         &self,
         shares: I,
     ) -> CrResult<SignatureG1>
-        where
-            I: IntoIterator<Item = (T, S)>,
-            T: IntoFr,
+    where
+        I: IntoIterator<Item = (T, S)>,
+        T: IntoFr,
     {
         let samples = shares
             .into_iter()
@@ -1343,9 +1342,9 @@ impl PublicKeySetG2 {
         &self,
         shares: I,
     ) -> CrResult<SignatureG1>
-        where
-            I: IntoIterator<Item = (T, S)>,
-            T: IntoFr,
+    where
+        I: IntoIterator<Item = (T, S)>,
+        T: IntoFr,
     {
         let samples = shares
             .into_iter()
@@ -1359,9 +1358,9 @@ impl PublicKeySetG2 {
         &self,
         shares: I,
     ) -> CrResult<SignatureG1>
-        where
-            I: IntoIterator<Item = (T, S)>,
-            T: IntoFr,
+    where
+        I: IntoIterator<Item = (T, S)>,
+        T: IntoFr,
     {
         let samples = shares
             .into_iter()
@@ -1579,11 +1578,11 @@ where
 /// Given a list of `t + 1` samples `(i - 1, f(i) * g)` for a polynomial `f` of degree `t`, and a
 /// group generator `g`, returns `f(0) * g`.
 fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> CrResult<C>
-    where
-        C: Curve<Scalar = Fr>,
-        I: IntoIterator<Item = (T, B)>,
-        T: IntoFr,
-        B: Borrow<C> + Send + Sync,
+where
+    C: Curve<Scalar = Fr>,
+    I: IntoIterator<Item = (T, B)>,
+    T: IntoFr,
+    B: Borrow<C> + Send + Sync,
 {
     let samples: Vec<_> = items
         .into_iter()
@@ -1616,23 +1615,27 @@ fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> CrResult<C>
     }
 
     // Step 3: Compute the intermediate results in parallel
-    let intermediate_results: Vec<C> = x_prod.into_par_iter().zip(&samples).filter_map(|(mut l0, (x, sample))| {
-        let mut denom = C::Scalar::one();
-        for (x0, _) in samples.iter().filter(|(x0, _)| x0 != x) {
-            let mut diff = *x0;
-            diff.sub_assign(x);
-            denom.mul_assign(&diff);
-        }
-        let denom_inv = denom.invert();
-        if denom_inv.is_none().into() {
-            // Handle error, return None
-            return None;
-        }
-        l0.mul_assign(&denom_inv.unwrap());
-        Some(sample.borrow().mul(l0))
-    }).collect();
+    let intermediate_results: Vec<C> = x_prod
+        .into_par_iter()
+        .zip(&samples)
+        .filter_map(|(mut l0, (x, sample))| {
+            let mut denom = C::Scalar::one();
+            for (x0, _) in samples.iter().filter(|(x0, _)| x0 != x) {
+                let mut diff = *x0;
+                diff.sub_assign(x);
+                denom.mul_assign(&diff);
+            }
+            let denom_inv = denom.invert();
+            if denom_inv.is_none().into() {
+                // Handle error, return None
+                return None;
+            }
+            l0.mul_assign(&denom_inv.unwrap());
+            Some(sample.borrow().mul(l0))
+        })
+        .collect();
 
-// Step 4: Aggregate the results
+    // Step 4: Aggregate the results
     let mut result = C::identity();
     for item in intermediate_results {
         result.add_assign(&item);
@@ -1643,8 +1646,8 @@ fn interpolate_parallelized<C, B, T, I>(t: usize, items: I) -> CrResult<C>
 
 // Struct to hold the Newton interpolation state
 pub struct NewtonInterpolation<C>
-    where
-        C: Curve<Scalar = Fr>,
+where
+    C: Curve<Scalar = Fr>,
 {
     x_points: Vec<C::Scalar>,
     table: Vec<Vec<C>>,
@@ -1654,13 +1657,13 @@ pub struct NewtonInterpolation<C>
 }
 
 impl<C> NewtonInterpolation<C>
-    where
-        C: Curve<Scalar = Fr>,
+where
+    C: Curve<Scalar = Fr>,
 {
     pub fn new() -> Self {
         Self {
             x_points: Vec::new(),
-            table: vec![vec![],vec![]],
+            table: vec![vec![], vec![]],
             value_at_zero: C::identity(),
             x_term: C::Scalar::one(),
             coeff_term: C::identity(),
@@ -1668,8 +1671,8 @@ impl<C> NewtonInterpolation<C>
     }
 
     pub fn add_point<T>(&mut self, x: T, y: C) -> std::result::Result<(), Error>
-        where
-            T: Into<Fr>,
+    where
+        T: Into<Fr>,
     {
         let mut x_fr: Fr = x.into();
         let one_fr = C::Scalar::one();
@@ -1686,15 +1689,15 @@ impl<C> NewtonInterpolation<C>
             self.table[1][0] = y;
 
             for j in 1..n {
-                let numerator = self.table[1][j-1] - self.table[0][j-1];
-                let denominator = x_fr.sub(&self.x_points[n-j-1]);
+                let numerator = self.table[1][j - 1] - self.table[0][j - 1];
+                let denominator = x_fr.sub(&self.x_points[n - j - 1]);
                 let denom_inv = denominator.invert();
                 if denom_inv.is_none().into() {
                     return Err(Error::DuplicateEntry);
                 }
                 self.table[1][j] = numerator.mul(denom_inv.unwrap());
             }
-            self.coeff_term = self.table[1][n-1];
+            self.coeff_term = self.table[1][n - 1];
             self.table[0] = self.table[1].clone();
             self.update_value_at_zero();
         }
@@ -1702,8 +1705,8 @@ impl<C> NewtonInterpolation<C>
     }
 
     fn update_value_at_zero(&mut self) {
-        let i = self.x_points.len()-1;
-        self.x_term.mul_assign(-self.x_points[i-1]);
+        let i = self.x_points.len() - 1;
+        self.x_term.mul_assign(-self.x_points[i - 1]);
         self.value_at_zero.add_assign(self.coeff_term * self.x_term);
     }
 
@@ -1805,7 +1808,9 @@ mod tests {
         }
 
         // Combined, they produce a signature matching the main public key.
-        let sig = pk_set.combine_g2_signatures(sigs).expect("signatures match");
+        let sig = pk_set
+            .combine_g2_signatures(sigs)
+            .expect("signatures match");
         assert!(pk_set.public_key().verify(&sig, msg));
 
         // A different set of signatories produces the same signature.
@@ -1817,7 +1822,9 @@ mod tests {
             })
             .collect();
 
-        let sig2 = pk_set.combine_g2_signatures(&sigs2).expect("signatures match");
+        let sig2 = pk_set
+            .combine_g2_signatures(&sigs2)
+            .expect("signatures match");
         assert_eq!(sig, sig2);
 
         Ok(())
@@ -2567,7 +2574,10 @@ mod tests {
         assert_eq!(pks_share0_child, pks_child_share0);
         // derived master public key is a pair for derived master secret key
         let sks_child = sks.derive_child(&index);
-        assert_eq!(sks_child.secret_key().public_key_g1(), pks_child.public_key());
+        assert_eq!(
+            sks_child.secret_key().public_key_g1(),
+            pks_child.public_key()
+        );
     }
 
     #[test]
