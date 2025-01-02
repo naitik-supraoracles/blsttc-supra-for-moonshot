@@ -499,7 +499,7 @@ mod secret_key_benches {
                 rng.fill_bytes(&mut msg);
                 (sk, msg)
             };
-            b.iter_with_setup(rand_factors, |(sk, msg)| sk.sign(msg));
+            b.iter_with_setup(rand_factors, |(sk, msg)| sk.sign_to_g1(msg));
         });
     }
 

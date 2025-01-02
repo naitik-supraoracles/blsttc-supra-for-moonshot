@@ -36,7 +36,7 @@ use rand::distributions::{Distribution, Standard};
 use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize,de, ser};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 
 use crate::cmp_pairing::cmp_affine;
@@ -749,6 +749,7 @@ impl Zeroize for SecretKey {
     }
 }
 
+impl ZeroizeOnDrop for SecretKey {}
 
 /// Creates a `SecretKey` containing the zero prime field element.
 impl Default for SecretKey {
