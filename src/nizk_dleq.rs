@@ -1,12 +1,12 @@
-use std::ops::{Mul, Sub};
+use crate::util::sha3_256;
+use crate::Fr;
 use blstrs::G1Affine;
 use ff::Field;
 use group::{Curve, GroupEncoding};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
-use crate::Fr;
-use crate::util::sha3_256;
+use std::ops::{Mul, Sub};
 
 const DOMAIN_PROOF_OF_DLEQ_CHALLENGE: &str = "blsttc-zk-proof-of-dleq-challenge";
 
@@ -28,7 +28,7 @@ pub struct DLEqWitness {
 }
 
 /// Zero-knowledge proof of equality of discrete log.
-#[derive(Clone, Debug, Serialize, Deserialize,Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ZkProofDLEq {
     pub c: Fr,
     pub s: Fr,
@@ -40,7 +40,14 @@ pub enum ZkProofDLEqError {
     InvalidInstance,
 }
 
-fn dleq_proof_challenge(g: &G1Affine, g_x: &G1Affine, h: &G1Affine, h_x: &G1Affine, g_k: &G1Affine, h_k: &G1Affine) -> Fr {
+fn dleq_proof_challenge(
+    g: &G1Affine,
+    g_x: &G1Affine,
+    h: &G1Affine,
+    h_x: &G1Affine,
+    g_k: &G1Affine,
+    h_k: &G1Affine,
+) -> Fr {
     let mut map = Vec::new();
     let g_bytes = g.to_bytes();
     let g_x_bytes = g_x.to_bytes();
@@ -70,7 +77,6 @@ fn dleq_proof_challenge(g: &G1Affine, g_x: &G1Affine, h: &G1Affine, h_x: &G1Affi
 }
 
 pub fn prove_gen(instance: &DLEqInstance, witness: &DLEqWitness) -> ZkProofDLEq {
-
     let k = witness.scalar_r;
     let g_k = instance.g.mul(&k).to_affine();
     let h_k = instance.h.mul(&k).to_affine();
@@ -90,13 +96,11 @@ pub fn prove_gen(instance: &DLEqInstance, witness: &DLEqWitness) -> ZkProofDLEq 
 }
 
 pub fn verify_proof(instance: &DLEqInstance, nizk: &ZkProofDLEq) -> Result<(), ZkProofDLEqError> {
-
     let mut g_k_prime = instance.g.mul(&nizk.s).to_affine();
     g_k_prime = G1Affine::from(g_k_prime + instance.g_x.mul(&nizk.c));
 
     let mut h_k_prime = instance.h.mul(&nizk.s).to_affine();
-    h_k_prime = G1Affine::from(h_k_prime + instance.h_x.mul( &nizk.c)
-    );
+    h_k_prime = G1Affine::from(h_k_prime + instance.h_x.mul(&nizk.c));
 
     // Verifier's challenge
     // c' = oracle(g,g^x,h,h^x,g^k',h^k')

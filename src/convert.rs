@@ -3,7 +3,7 @@
 use blst::blst_scalar;
 
 use crate::{
-    error::{Error, CrResult},
+    error::{CrResult, Error},
     Fr, G1Affine, G2Affine, DST, PK_SIZE, SIG_SIZE, SK_SIZE,
 };
 

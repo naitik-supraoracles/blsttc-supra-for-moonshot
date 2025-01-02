@@ -16,6 +16,7 @@
 //! This module defines univariate polynomials (in one variable) and _symmetric_ bivariate
 //! polynomials (in two variables) over a field `Fr`, as well as their _commitments_ in `G`.
 
+use blstrs::{G2Affine, G2Projective};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
@@ -23,7 +24,6 @@ use std::hash::{Hash, Hasher};
 use std::iter::repeat_with;
 use std::ops::{AddAssign, Mul, MulAssign, SubAssign};
 use std::{cmp, iter, ops};
-use blstrs::{G2Affine, G2Projective};
 
 use group::{prime::PrimeCurveAffine, Curve, Group};
 use rand::Rng;
@@ -32,7 +32,7 @@ use zeroize::Zeroize;
 
 use crate::cmp_pairing::cmp_affine;
 use crate::convert::{fr_from_bytes, g1_from_bytes, g2_from_bytes};
-use crate::error::{Error, CrResult};
+use crate::error::{CrResult, Error};
 use crate::into_fr::IntoFr;
 use crate::secret::clear_fr;
 use crate::{Field, Fr, G1Affine, G1Projective, PK_SIZE, SIG_SIZE, SK_SIZE};
